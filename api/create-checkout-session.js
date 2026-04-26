@@ -1,22 +1,32 @@
-import Stripe from "stripe"
-
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" })
   }
 
   try {
+    const nodeProcess = globalThis?.process
+    const cjsRequire = globalThis?.require
+    const stripe = cjsRequire?.("stripe")(nodeProcess?.env?.STRIPE_SECRET_KEY)
+
     const { userId, email } = req.body ?? {}
     if (!userId || !email) {
       return res.status(400).json({ error: "userId e email sao obrigatorios." })
     }
 
-    const env = globalThis?.process?.env ?? {}
+    const env = nodeProcess?.env ?? {}
     const secretKey = env.STRIPE_SECRET_KEY
     const priceId = env.STRIPE_PRICE_ID
-    const baseUrlCandidate = env.APP_URL || env.VERCEL_URL || "http://localhost:5173"
+    const originFromRequest = req.headers?.origin
+    const baseUrlCandidate = originFromRequest || env.APP_URL || env.VERCEL_URL || "http://localhost:5173"
 
-    if (!secretKey || !priceId) {
+    const mask = (value) => (value ? `${value.slice(0, 4)}...` : "undefined")
+    console.log("[create-checkout-session] env check", {
+      stripeSecretPrefix: mask(secretKey),
+      stripePricePrefix: mask(priceId),
+      originFromRequest: originFromRequest || "undefined",
+    })
+
+    if (!secretKey || !priceId || !stripe) {
       return res.status(500).json({ error: "Variaveis STRIPE_SECRET_KEY/STRIPE_PRICE_ID nao configuradas." })
     }
 
@@ -39,8 +49,6 @@ export default async function handler(req, res) {
       console.error("STRIPE_PRICE_ID invalido.", { priceId })
       return res.status(500).json({ error: "STRIPE_PRICE_ID invalido. Verifique variavel de ambiente." })
     }
-
-    const stripe = new Stripe(secretKey)
 
     let session
     try {
