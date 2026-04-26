@@ -35,6 +35,74 @@ export async function criarLancamento(lancamento) {
   return data
 }
 
+export async function importarLancamentosAutomaticos(lancamentos) {
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser()
+
+  if (authError) {
+    throw authError
+  }
+  if (!user?.id) {
+    throw new Error("Usuario nao autenticado.")
+  }
+
+  const normalized = (lancamentos ?? []).map((item) => ({
+    ...item,
+    user_id: user.id,
+    fonte: "automatico",
+    status_conciliacao: "pendente_revisao",
+    visibilidade: "privado",
+  }))
+
+  if (normalized.length === 0) {
+    return []
+  }
+
+  const { data, error } = await supabase
+    .from("lancamentos")
+    .upsert(normalized, { onConflict: "user_id,external_id", ignoreDuplicates: false })
+    .select("*")
+
+  if (error) {
+    throw error
+  }
+
+  return data
+}
+
+export async function revisarLancamentoConciliacao(id, { visibilidade, aprovado = true }) {
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser()
+
+  if (authError) {
+    throw authError
+  }
+
+  let query = supabase
+    .from("lancamentos")
+    .update({
+      visibilidade: visibilidade ?? "privado",
+      status_conciliacao: aprovado ? "aprovado" : "pendente_revisao",
+    })
+    .eq("id", id)
+
+  if (user?.id) {
+    query = query.eq("user_id", user.id)
+  }
+
+  const { data, error } = await query.select("*").single()
+
+  if (error) {
+    throw error
+  }
+
+  return data
+}
+
 export async function atualizarLancamento(id, lancamento) {
   const {
     data: { user },

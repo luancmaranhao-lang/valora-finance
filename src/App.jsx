@@ -1,15 +1,19 @@
 import { useEffect, useState } from "react"
+import UpgradeModal from "./components/UpgradeModal"
+import useSubscription from "./hooks/useSubscription"
 import MainLayout from "./layouts/MainLayout"
 import Dashboard from "./pages/Dashboard"
 import Cartoes from "./pages/Cartoes"
 import Configuracoes from "./pages/Configuracoes"
 import Contas from "./pages/Contas"
+import Grupos from "./pages/Grupos"
 import IAFinanceira from "./pages/IAFinanceira"
 import Lancamentos from "./pages/Lancamentos"
 import Login from "./pages/Login"
 import Metas from "./pages/Metas"
 import Relatorios from "./pages/Relatorios"
 import { getCurrentUser, signIn, signOut, signUp } from "./services/authService"
+import { createCheckoutSession } from "./services/stripeService"
 
 const pageComponents = {
   Dashboard,
@@ -19,12 +23,17 @@ const pageComponents = {
   Metas,
   Relatórios: Relatorios,
   "IA Financeira": IAFinanceira,
+  Grupos,
   Configurações: Configuracoes,
 }
+
+const premiumPages = new Set(["IA Financeira", "Grupos"])
 
 function App() {
   const [user, setUser] = useState(null)
   const [isLoadingUser, setIsLoadingUser] = useState(true)
+  const [checkoutLoading, setCheckoutLoading] = useState(false)
+  const { isPremium } = useSubscription()
 
   useEffect(() => {
     async function loadCurrentUser() {
@@ -58,6 +67,23 @@ function App() {
     setUser(null)
   }
 
+  async function handleUpgrade() {
+    if (!user?.id) return
+    try {
+      setCheckoutLoading(true)
+      const { url } = await createCheckoutSession({ userId: user.id, email: user.email })
+      if (url) {
+        window.location.href = url
+      }
+    } catch (error) {
+      if (error) {
+        setCheckoutLoading(false)
+      }
+    } finally {
+      setCheckoutLoading(false)
+    }
+  }
+
   if (isLoadingUser) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
@@ -75,8 +101,30 @@ function App() {
   return (
     <MainLayout userEmail={user.email} onSignOut={handleSignOut}>
       {({ activePage }) => {
+        const isLocked = premiumPages.has(activePage) && !isPremium
         const ActivePageComponent = pageComponents[activePage] ?? Dashboard
-        return <ActivePageComponent />
+        return (
+          <>
+            {isLocked ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <h2 className="text-xl font-semibold text-slate-900">Recurso Premium</h2>
+                <p className="mt-2 text-sm text-slate-600">
+                  Esta funcionalidade faz parte do plano Premium. Faça upgrade para liberar acesso completo.
+                </p>
+              </div>
+            ) : (
+              <ActivePageComponent />
+            )}
+            <UpgradeModal
+              open={isLocked}
+              title="Desbloquear Premium"
+              description="IA Financeira e Grupos estao disponiveis no plano Premium."
+              onClose={() => setCheckoutLoading(false)}
+              onUpgrade={handleUpgrade}
+              isLoading={checkoutLoading}
+            />
+          </>
+        )
       }}
     </MainLayout>
   )

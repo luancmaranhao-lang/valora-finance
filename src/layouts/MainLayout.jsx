@@ -8,6 +8,7 @@ const menuItems = [
   "Metas",
   "Relatórios",
   "IA Financeira",
+  "Grupos",
   "Configurações",
 ]
 
