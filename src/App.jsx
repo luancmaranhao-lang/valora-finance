@@ -119,7 +119,10 @@ function App() {
               open={isLocked}
               title="Desbloquear Premium"
               description="IA Financeira e Grupos estao disponiveis no plano Premium."
-              onClose={() => setCheckoutLoading(false)}
+              onClose={() => {
+                setCheckoutLoading(false)
+                window.location.href = "/"
+              }}
               onUpgrade={handleUpgrade}
               isLoading={checkoutLoading}
             />

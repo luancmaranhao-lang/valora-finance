@@ -10,19 +10,22 @@ export default async function handler(req, res) {
     const { userEmail, email, userId } = req.body ?? {}
     const customerEmail = userEmail || email
     if (!customerEmail) throw new Error("Email do usuario faltando")
+    const priceId = env.STRIPE_PRICE_ID
 
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
-      line_items: [{ price: env.STRIPE_PRICE_ID, quantity: 1 }],
-      mode: "subscription",
       customer_email: customerEmail,
+      payment_method_types: ["card"],
+      line_items: [{ price: priceId, quantity: 1 }],
+      mode: "subscription",
+      allow_promotion_codes: true,
       client_reference_id: userId || undefined,
+      success_url: `${req.headers.origin}/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${req.headers.origin}/`,
       metadata: {
-        priceId: env.STRIPE_PRICE_ID,
+        userId: userId || "",
         user_id: userId || "",
+        priceId: priceId,
       },
-      success_url: `${req.headers.origin}/?success=true`,
-      cancel_url: `${req.headers.origin}/?cancel=true`,
     })
 
     return res.status(200).json({ id: session.id, url: session.url })

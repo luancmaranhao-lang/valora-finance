@@ -28,7 +28,7 @@ export default async function handler(req, res) {
 
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
-    const customerEmail = session.customer_details.email;
+    const userId = session.metadata?.userId || session.metadata?.user_id;
     const priceId = session.metadata?.priceId;
 
     // 🎯 A MÁGICA ACONTECE AQUI:
@@ -45,6 +45,11 @@ export default async function handler(req, res) {
       limite = 1; // Padrão para o Start
     }
 
+    if (!userId) {
+      console.error("Webhook sem userId nos metadados:", session?.id);
+      return res.status(400).json({ error: "userId nao encontrado no metadata." });
+    }
+
     // 💾 Atualiza o banco de dados (tabela profiles)
     const { error } = await supabase
       .from('profiles')
@@ -55,7 +60,7 @@ export default async function handler(req, res) {
         assinatura_status: 'active',
         stripe_customer_id: session.customer 
       })
-      .eq('email', customerEmail);
+      .eq('id', userId);
 
     if (error) console.error("Erro no Supabase:", error);
   }
