@@ -12,16 +12,19 @@ import { supabase } from "../services/supabaseClient"
 
 const filters = ["Todos", "Pagos", "Pendentes", "Receitas", "Despesas", "Compartilhados", "Privados"]
 const subscriptionTag = "[ASSINATURA]"
+const customCategoryOption = "__CUSTOM__"
 const categoryOptions = [
-  "🏠 Moradia",
+  "💼 Trabalho",
+  "⚖️ Jurídico",
+  "🏠 Casa",
   "🛒 Mercado",
   "🚗 Transporte",
   "🍔 Alimentação",
   "🏥 Saúde",
   "🍿 Lazer",
-  "🎓 Educação",
+  "👨‍👩‍👧‍👦 Família",
   "⚽ Hobby",
-  "🧾 Outros",
+  "🎓 Educação",
 ]
 
 const initialFormData = {
@@ -30,7 +33,7 @@ const initialFormData = {
   paymentStatus: "Pendente",
   installments: "1",
   description: "",
-  category: "🏠 Moradia",
+  category: "💼 Trabalho",
   value: "",
   date: "",
   dueDay: "",
@@ -144,6 +147,7 @@ function Lancamentos() {
   const [filter, setFilter] = useState("Todos")
   const [transactions, setTransactions] = useState([])
   const [formData, setFormData] = useState(initialFormData)
+  const [customCategory, setCustomCategory] = useState("")
   const [editingId, setEditingId] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
@@ -193,12 +197,21 @@ function Lancamentos() {
     })
   }
 
+  function resolveCategoryValue() {
+    if (formData.category === customCategoryOption) {
+      return customCategory.trim()
+    }
+    return formData.category.trim()
+  }
+
   function resetForm() {
     setFormData(initialFormData)
+    setCustomCategory("")
     setEditingId(null)
   }
 
   function handleEdit(transaction) {
+    const isDefaultCategory = categoryOptions.includes(transaction.category)
     setEditingId(transaction.id)
     setFormData({
       type: transaction.type,
@@ -206,7 +219,7 @@ function Lancamentos() {
       paymentStatus: transaction.paymentStatus ?? "Pendente",
       installments: "1",
       description: transaction.description,
-      category: transaction.category,
+      category: isDefaultCategory ? transaction.category : customCategoryOption,
       value: String(transaction.value),
       date: transaction.date,
       dueDay: transaction.dueDay ?? "",
@@ -215,6 +228,7 @@ function Lancamentos() {
       visibility: transaction.visibility,
       splitMethod: transaction.splitMethod === "-" ? "Igual" : transaction.splitMethod,
     })
+    setCustomCategory(isDefaultCategory ? "" : transaction.category)
   }
 
   async function handleRemove(id) {
@@ -238,7 +252,8 @@ function Lancamentos() {
     const normalizedValue = Number(formData.value)
     const normalizedDueDay = Number(formData.dueDay || 0)
     const normalizedInstallments = Number(formData.installments || 1)
-    if (!formData.description || !formData.category || !formData.date || !formData.paymentMethod || !normalizedValue) {
+    const normalizedCategory = resolveCategoryValue()
+    if (!formData.description || !normalizedCategory || !formData.date || !formData.paymentMethod || !normalizedValue) {
       return
     }
     if (isInstallment && (!Number.isInteger(normalizedInstallments) || normalizedInstallments < 2)) {
@@ -272,7 +287,7 @@ function Lancamentos() {
         user_id: user.id,
         tipo: tipoMap[formData.type] ?? "despesa",
         descricao: applySubscriptionTag(formData.description.trim(), formData.isSubscription),
-        categoria: formData.category.trim(),
+        categoria: normalizedCategory,
         valor: normalizedValue,
         data: formattedDate,
         forma_pagamento: formData.paymentMethod.trim(),
@@ -418,8 +433,21 @@ function Lancamentos() {
                   {category}
                 </option>
               ))}
+              <option value={customCategoryOption}>✍️ Outra (digitar manualmente)</option>
             </select>
           </label>
+
+          {formData.category === customCategoryOption ? (
+            <label className="space-y-1.5">
+              <span className="text-sm font-medium text-slate-700">Categoria personalizada</span>
+              <input
+                value={customCategory}
+                onChange={(event) => setCustomCategory(event.target.value)}
+                placeholder="Ex: 🧾 Outros ou categoria sem emoji"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-slate-300"
+              />
+            </label>
+          ) : null}
 
           <label className="space-y-1.5">
             <span className="text-sm font-medium text-slate-700">Valor</span>
