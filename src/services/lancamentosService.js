@@ -1,5 +1,26 @@
 import { supabase } from "./supabaseClient"
 
+function normalizeDateOnly(value) {
+  if (!value) return value
+
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    const match = trimmed.match(/^(\d{4}-\d{2}-\d{2})/)
+    if (match?.[1]) return match[1]
+    return trimmed
+  }
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return [
+      value.getFullYear(),
+      String(value.getMonth() + 1).padStart(2, "0"),
+      String(value.getDate()).padStart(2, "0"),
+    ].join("-")
+  }
+
+  return value
+}
+
 function normalizeLancamentoPayload(lancamento = {}) {
   const payload = { ...lancamento }
 
@@ -12,6 +33,10 @@ function normalizeLancamentoPayload(lancamento = {}) {
       payload.dia_vencimento === null || payload.dia_vencimento === undefined || payload.dia_vencimento === ""
         ? null
         : Number(payload.dia_vencimento)
+  }
+
+  if ("data" in payload) {
+    payload.data = normalizeDateOnly(payload.data)
   }
 
   return payload
