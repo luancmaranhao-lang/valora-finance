@@ -64,6 +64,26 @@ function formatCurrency(value) {
   }).format(value)
 }
 
+function getRecurringStatus(transactionDate, recurrenceType) {
+  if (recurrenceType === "Única") {
+    return { label: "-", tone: "neutral" }
+  }
+
+  const parsedDate = new Date(transactionDate)
+  const isValidDate = !Number.isNaN(parsedDate.getTime())
+  if (!isValidDate) {
+    return { label: "Previsto", tone: "warning" }
+  }
+
+  const now = new Date()
+  now.setHours(0, 0, 0, 0)
+  parsedDate.setHours(0, 0, 0, 0)
+
+  return parsedDate <= now
+    ? { label: "Realizado", tone: "info" }
+    : { label: "Previsto", tone: "warning" }
+}
+
 function mapDbToUi(record) {
   const visibilityRaw = record.visibilidade ?? record.visibility ?? "privado"
   const splitMethodRaw = record.metodo_divisao ?? record.split_method ?? record.splitMethod ?? null
@@ -454,6 +474,7 @@ function Lancamentos() {
                   <th className="px-3 py-2">Categoria</th>
                   <th className="px-3 py-2">Tipo</th>
                   <th className="px-3 py-2">Recorrência</th>
+                  <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2">Forma de pagamento</th>
                   <th className="px-3 py-2">Visibilidade</th>
                   <th className="px-3 py-2">Divisão</th>
@@ -462,8 +483,11 @@ function Lancamentos() {
                 </tr>
               </thead>
               <tbody>
-                {filteredTransactions.map((transaction) => (
-                  <tr key={transaction.id} className="rounded-xl border border-slate-200 bg-slate-50/40">
+                {filteredTransactions.map((transaction) => {
+                  const recurrenceStatus = getRecurringStatus(transaction.date, transaction.recurrenceType)
+
+                  return (
+                    <tr key={transaction.id} className="rounded-xl border border-slate-200 bg-slate-50/40">
                     <td className="rounded-l-xl px-3 py-3 text-slate-700">{transaction.date}</td>
                     <td className="px-3 py-3 font-medium text-slate-900">{transaction.description}</td>
                     <td className="px-3 py-3 text-slate-700">{transaction.category}</td>
@@ -471,6 +495,9 @@ function Lancamentos() {
                       <StatusBadge label={transaction.type} tone={transaction.type === "Receita" ? "success" : "danger"} />
                     </td>
                     <td className="px-3 py-3 text-slate-700">{transaction.recurrenceType}</td>
+                    <td className="px-3 py-3">
+                      <StatusBadge label={recurrenceStatus.label} tone={recurrenceStatus.tone} />
+                    </td>
                     <td className="px-3 py-3 text-slate-700">{transaction.paymentMethod}</td>
                     <td className="px-3 py-3">
                       <StatusBadge
@@ -502,8 +529,9 @@ function Lancamentos() {
                     <td className="rounded-r-xl px-3 py-3 text-right font-semibold text-slate-900">
                       {formatCurrency(transaction.value)}
                     </td>
-                  </tr>
-                ))}
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
