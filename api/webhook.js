@@ -1,88 +1,64 @@
-import Stripe from "stripe"
-import { createClient } from "@supabase/supabase-js"
-import { Buffer } from "node:buffer"
+import Stripe from 'stripe';
+import { createClient } from '@supabase/supabase-js';
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 export const config = {
   api: {
-    bodyParser: false,
+    bodyParser: false, // Necessário para o Stripe validar a assinatura
   },
-}
-
-async function readRawBody(req) {
-  const chunks = []
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
-  }
-  return Buffer.concat(chunks)
-}
+};
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" })
-  }
+  if (req.method !== 'POST') return res.status(405).end();
+
+  const sig = req.headers['stripe-signature'];
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  const rawBody = Buffer.concat(chunks);
+
+  let event;
 
   try {
-    const env = globalThis?.process?.env ?? {}
-    const stripeSecret = env.STRIPE_SECRET_KEY
-    const webhookSecret = env.STRIPE_WEBHOOK_SECRET
-    const supabaseUrl = env.SUPABASE_URL || env.VITE_SUPABASE_URL
-    const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
-
-    if (!stripeSecret || !webhookSecret || !supabaseUrl || !serviceRoleKey) {
-      return res.status(500).json({ error: "Variaveis de ambiente obrigatorias ausentes." })
-    }
-
-    const stripe = new Stripe(stripeSecret)
-    const supabase = createClient(supabaseUrl, serviceRoleKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    })
-
-    const signature = req.headers["stripe-signature"]
-    if (!signature) {
-      return res.status(400).json({ error: "Header stripe-signature ausente." })
-    }
-
-    const rawBody = await readRawBody(req)
-    let event
-    try {
-      event = stripe.webhooks.constructEvent(rawBody, signature, webhookSecret)
-    } catch (error) {
-      return res.status(400).json({ error: `Assinatura invalida: ${error?.message || "erro desconhecido"}` })
-    }
-
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object
-      const customerEmail = session?.customer_details?.email
-      const priceId = session?.metadata?.priceId
-
-      let limite = 1
-      if (priceId === "price_1PQ...") limite = 3
-      if (priceId === "price_XYZ...") limite = 5
-
-      if (!customerEmail) {
-        return res.status(400).json({ error: "customer_details.email nao encontrado na session." })
-      }
-
-      const { error } = await supabase
-        .from("profiles")
-        .update({
-          is_premium: true,
-          limite_acessos: limite,
-          plano: "premium",
-          stripe_customer_id: session.customer ? String(session.customer) : null,
-          assinatura_status: "active",
-        })
-        .eq("email", customerEmail)
-
-      if (error) {
-        console.error("Erro ao atualizar profiles:", error)
-        return res.status(500).json({ error: error.message || "Falha ao atualizar perfil premium." })
-      }
-    }
-
-    return res.status(200).json({ received: true })
-  } catch (error) {
-    return res.status(500).json({ error: error?.message || "Erro interno no webhook." })
+    event = stripe.webhooks.constructEvent(rawBody, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    return res.status(400).send(`Webhook Error: ${err.message}`);
   }
-}
 
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    const customerEmail = session.customer_details.email;
+    const priceId = session.metadata?.priceId;
+
+    // 🎯 A MÁGICA ACONTECE AQUI:
+    // O código compara o ID do que foi pago com as variáveis da Vercel
+    let limite = 1;
+
+    if (priceId === process.env.STRIPE_PRICE_ID_PLUS) {
+      limite = 2;
+    } else if (priceId === process.env.STRIPE_PRICE_ID_PREMIUM) {
+      limite = 3;
+    } else if (priceId === process.env.STRIPE_PRICE_ID_ELITE) {
+      limite = 5;
+    } else {
+      limite = 1; // Padrão para o Start
+    }
+
+    // 💾 Atualiza o banco de dados (tabela profiles)
+    const { error } = await supabase
+      .from('profiles')
+      .update({ 
+        is_premium: true, 
+        limite_acessos: limite,
+        plano: 'premium',
+        assinatura_status: 'active',
+        stripe_customer_id: session.customer 
+      })
+      .eq('email', customerEmail);
+
+    if (error) console.error("Erro no Supabase:", error);
+  }
+
+  res.json({ received: true });
+}
