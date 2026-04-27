@@ -1,5 +1,22 @@
 import { supabase } from "./supabaseClient"
 
+function normalizeLancamentoPayload(lancamento = {}) {
+  const payload = { ...lancamento }
+
+  if ("recorrencia" in payload && payload.recorrencia == null) {
+    payload.recorrencia = "unica"
+  }
+
+  if ("dia_vencimento" in payload) {
+    payload.dia_vencimento =
+      payload.dia_vencimento === null || payload.dia_vencimento === undefined || payload.dia_vencimento === ""
+        ? null
+        : Number(payload.dia_vencimento)
+  }
+
+  return payload
+}
+
 export async function listarLancamentos() {
   const {
     data: { user },
@@ -26,7 +43,8 @@ export async function listarLancamentos() {
 }
 
 export async function criarLancamento(lancamento) {
-  const { data, error } = await supabase.from("lancamentos").insert(lancamento).select("*").single()
+  const payload = normalizeLancamentoPayload(lancamento)
+  const { data, error } = await supabase.from("lancamentos").insert(payload).select("*").single()
 
   if (error) {
     throw error
@@ -113,7 +131,8 @@ export async function atualizarLancamento(id, lancamento) {
     throw authError
   }
 
-  let query = supabase.from("lancamentos").update(lancamento).eq("id", id)
+  const payload = normalizeLancamentoPayload(lancamento)
+  let query = supabase.from("lancamentos").update(payload).eq("id", id)
 
   if (user?.id) {
     query = query.eq("user_id", user.id)

@@ -97,6 +97,49 @@ function Dashboard() {
       }, 0)
     }
 
+    function buildRecurringKey(item) {
+      return [
+        (item.descricao ?? item.description ?? "").toString().trim().toLowerCase(),
+        (item.categoria ?? item.category ?? "").toString().trim().toLowerCase(),
+        (item.forma_pagamento ?? item.payment_method ?? item.paymentMethod ?? "").toString().trim().toLowerCase(),
+        (item.recorrencia ?? "unica").toString().trim().toLowerCase(),
+      ].join("|")
+    }
+
+    function projectedRecurringForMonth(allItems, year, month) {
+      const recurringTypes = new Set(["recorrente_fixa", "recorrente_variavel"])
+      const recurringExpenses = allItems.filter((item) => {
+        const tipo = (item.tipo ?? item.type ?? "").toString().toLowerCase()
+        const recorrencia = (item.recorrencia ?? "unica").toString().toLowerCase()
+        return tipo === "despesa" && recurringTypes.has(recorrencia)
+      })
+
+      if (recurringExpenses.length === 0) return 0
+
+      const sortedByDateDesc = [...recurringExpenses].sort(
+        (a, b) => new Date(b.data ?? b.date ?? 0) - new Date(a.data ?? a.date ?? 0),
+      )
+
+      const latestTemplateByKey = new Map()
+      sortedByDateDesc.forEach((item) => {
+        const key = buildRecurringKey(item)
+        if (!latestTemplateByKey.has(key)) {
+          latestTemplateByKey.set(key, item)
+        }
+      })
+
+      const monthItems = allItems.filter((item) => isFromMonth(item.data ?? item.date, year, month))
+      const existingKeysInMonth = new Set(monthItems.map(buildRecurringKey))
+
+      let projected = 0
+      latestTemplateByKey.forEach((item, key) => {
+        if (existingKeysInMonth.has(key)) return
+        projected += Number(item.valor ?? item.value ?? 0)
+      })
+
+      return projected
+    }
+
     function sumPendingAccounts(items) {
       return items.reduce((sum, item) => {
         const status = (item.status ?? "").toString().toLowerCase()
@@ -119,9 +162,13 @@ function Dashboard() {
     )
 
     const monthlyIncome = sumByType(currentMonthTransactions, "receita")
-    const monthlyExpenses = sumByType(currentMonthTransactions, "despesa")
+    const monthlyRealExpenses = sumByType(currentMonthTransactions, "despesa")
+    const monthlyProjectedRecurring = projectedRecurringForMonth(transactions, currentYear, currentMonth)
+    const monthlyExpenses = monthlyRealExpenses + monthlyProjectedRecurring
     const previousIncome = sumByType(previousMonthTransactions, "receita")
-    const previousExpenses = sumByType(previousMonthTransactions, "despesa")
+    const previousRealExpenses = sumByType(previousMonthTransactions, "despesa")
+    const previousProjectedRecurring = projectedRecurringForMonth(transactions, previousYear, previousMonth)
+    const previousExpenses = previousRealExpenses + previousProjectedRecurring
     const monthlyPendingAccounts = sumPendingAccounts(currentMonthAccounts)
     const previousPending = sumPendingAccounts(previousMonthAccounts)
     const forecastBalance = monthlyIncome - monthlyExpenses - monthlyPendingAccounts
@@ -156,6 +203,7 @@ function Dashboard() {
     return {
       monthlyIncome,
       monthlyExpenses,
+      monthlyProjectedRecurring,
       monthlyPendingAccounts,
       forecastBalance,
       incomeVariation: calculateVariation(monthlyIncome, previousIncome),
@@ -191,7 +239,7 @@ function Dashboard() {
         <StatCard
           title="Despesas realizadas"
           value={dashboardData.monthlyExpenses}
-          subtitle={`${dashboardData.expensesVariation} vs mes anterior`}
+          subtitle={`${dashboardData.expensesVariation} vs mes anterior • ${formatCurrency(dashboardData.monthlyProjectedRecurring)} previstas`}
           tone="negative"
         />
         <StatCard

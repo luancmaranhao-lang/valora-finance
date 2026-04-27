@@ -14,10 +14,12 @@ const filters = ["Todos", "Receitas", "Despesas", "Compartilhados", "Privados"]
 
 const initialFormData = {
   type: "Despesa",
+  recurrenceType: "Única",
   description: "",
   category: "",
   value: "",
   date: "",
+  dueDay: "",
   paymentMethod: "",
   visibility: "Privado",
   splitMethod: "Igual",
@@ -46,6 +48,15 @@ const tipoMap = {
   despesa: "despesa",
 }
 
+const recurrenceMap = {
+  "Única": "unica",
+  "Recorrente Fixa": "recorrente_fixa",
+  "Recorrente Variável": "recorrente_variavel",
+  unica: "unica",
+  recorrente_fixa: "recorrente_fixa",
+  recorrente_variavel: "recorrente_variavel",
+}
+
 function formatCurrency(value) {
   return new Intl.NumberFormat("pt-BR", {
     style: "currency",
@@ -57,14 +68,22 @@ function mapDbToUi(record) {
   const visibilityRaw = record.visibilidade ?? record.visibility ?? "privado"
   const splitMethodRaw = record.metodo_divisao ?? record.split_method ?? record.splitMethod ?? null
   const typeRaw = record.tipo ?? record.type ?? "despesa"
+  const recurrenceRaw = record.recorrencia ?? "unica"
 
   return {
     id: record.id,
     type: typeRaw === "receita" ? "Receita" : "Despesa",
+    recurrenceType:
+      recurrenceRaw === "recorrente_fixa"
+        ? "Recorrente Fixa"
+        : recurrenceRaw === "recorrente_variavel"
+          ? "Recorrente Variável"
+          : "Única",
     description: record.descricao ?? record.description ?? "",
     category: record.categoria ?? record.category ?? "",
     value: Number(record.valor ?? record.value ?? 0),
     date: String(record.data ?? record.date ?? "").slice(0, 10),
+    dueDay: String(record.dia_vencimento ?? ""),
     paymentMethod: record.forma_pagamento ?? record.payment_method ?? record.paymentMethod ?? "",
     visibility:
       visibilityRaw === "compartilhado" ? "Compartilhar no relatório do grupo" : "Privado",
@@ -90,6 +109,7 @@ function Lancamentos() {
   const [messageType, setMessageType] = useState("neutral")
 
   const isShared = formData.visibility === "Compartilhar no relatório do grupo"
+  const isRecurring = formData.recurrenceType !== "Única"
 
   async function loadLancamentos() {
     try {
@@ -126,10 +146,12 @@ function Lancamentos() {
     setEditingId(transaction.id)
     setFormData({
       type: transaction.type,
+      recurrenceType: transaction.recurrenceType ?? "Única",
       description: transaction.description,
       category: transaction.category,
       value: String(transaction.value),
       date: transaction.date,
+      dueDay: transaction.dueDay ?? "",
       paymentMethod: transaction.paymentMethod,
       visibility: transaction.visibility,
       splitMethod: transaction.splitMethod === "-" ? "Igual" : transaction.splitMethod,
@@ -155,7 +177,13 @@ function Lancamentos() {
     event.preventDefault()
 
     const normalizedValue = Number(formData.value)
+    const normalizedDueDay = Number(formData.dueDay || 0)
     if (!formData.description || !formData.category || !formData.date || !formData.paymentMethod || !normalizedValue) {
+      return
+    }
+    if (isRecurring && (!normalizedDueDay || normalizedDueDay < 1 || normalizedDueDay > 31)) {
+      setMessageType("error")
+      setMessage("Informe um dia de vencimento válido entre 1 e 31 para recorrências.")
       return
     }
 
@@ -187,6 +215,8 @@ function Lancamentos() {
         valor: normalizedValue,
         data: formattedDate,
         forma_pagamento: formData.paymentMethod.trim(),
+        recorrencia: recurrenceMap[formData.recurrenceType] ?? "unica",
+        dia_vencimento: isRecurring ? normalizedDueDay : null,
         visibilidade: visibilityMap[formData.visibility] ?? "privado",
         metodo_divisao: isShared ? (divisionMethodMap[formData.splitMethod] ?? null) : null,
       }
@@ -257,6 +287,20 @@ function Lancamentos() {
           </label>
 
           <label className="space-y-1.5">
+            <span className="text-sm font-medium text-slate-700">Recorrência</span>
+            <select
+              name="recurrenceType"
+              value={formData.recurrenceType}
+              onChange={handleChange}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-slate-300"
+            >
+              <option>Única</option>
+              <option>Recorrente Fixa</option>
+              <option>Recorrente Variável</option>
+            </select>
+          </label>
+
+          <label className="space-y-1.5">
             <span className="text-sm font-medium text-slate-700">Descrição</span>
             <input
               name="description"
@@ -302,6 +346,22 @@ function Lancamentos() {
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-slate-300"
             />
           </label>
+
+          {isRecurring ? (
+            <label className="space-y-1.5">
+              <span className="text-sm font-medium text-slate-700">Dia de vencimento</span>
+              <input
+                name="dueDay"
+                type="number"
+                min="1"
+                max="31"
+                value={formData.dueDay}
+                onChange={handleChange}
+                placeholder="Ex: 10"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-slate-300"
+              />
+            </label>
+          ) : null}
 
           <label className="space-y-1.5">
             <span className="text-sm font-medium text-slate-700">Forma de pagamento</span>
@@ -393,6 +453,7 @@ function Lancamentos() {
                   <th className="px-3 py-2">Descrição</th>
                   <th className="px-3 py-2">Categoria</th>
                   <th className="px-3 py-2">Tipo</th>
+                  <th className="px-3 py-2">Recorrência</th>
                   <th className="px-3 py-2">Forma de pagamento</th>
                   <th className="px-3 py-2">Visibilidade</th>
                   <th className="px-3 py-2">Divisão</th>
@@ -409,6 +470,7 @@ function Lancamentos() {
                     <td className="px-3 py-3">
                       <StatusBadge label={transaction.type} tone={transaction.type === "Receita" ? "success" : "danger"} />
                     </td>
+                    <td className="px-3 py-3 text-slate-700">{transaction.recurrenceType}</td>
                     <td className="px-3 py-3 text-slate-700">{transaction.paymentMethod}</td>
                     <td className="px-3 py-3">
                       <StatusBadge
