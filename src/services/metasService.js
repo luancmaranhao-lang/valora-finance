@@ -29,9 +29,19 @@ export const metasService = {
     if (userError) throw userError
     if (!user?.id) throw new Error("Usuario nao autenticado.")
 
+    const payload = {
+      id: meta.id,
+      nome: meta.nome ?? meta.name ?? "Meta",
+      valor_alvo: Number(meta.valor_alvo ?? meta.target ?? 0),
+      valor_atual: Number(meta.valor_atual ?? meta.current ?? 0),
+      prazo: meta.prazo ?? meta.deadline ?? null,
+      user_id: user.id,
+    }
+    if (!payload.id) delete payload.id
+
     const { data, error } = await supabase
       .from("metas")
-      .upsert({ ...meta, user_id: user.id })
+      .upsert(payload)
       .select()
 
     if (error) throw error

@@ -132,6 +132,10 @@ function Dashboard() {
       .sort((a, b) => new Date(a.vencimento ?? a.dueDate) - new Date(b.vencimento ?? b.dueDate))
       .slice(0, 5)
 
+    const recentTransactions = [...transactions]
+      .sort((a, b) => new Date(b.data ?? b.date ?? 0) - new Date(a.data ?? a.date ?? 0))
+      .slice(0, 6)
+
     const quickSummary =
       forecastBalance >= 0
         ? "Fluxo projetado positivo para o mes atual."
@@ -161,6 +165,7 @@ function Dashboard() {
       upcomingAccounts,
       quickSummary,
       recommendedActions,
+      recentTransactions,
     }
   }, [transactions, accounts])
 
@@ -276,16 +281,16 @@ function Dashboard() {
 
       <section className="grid gap-4 xl:grid-cols-3">
         <div className="xl:col-span-2">
-          <FinanceInsightCard />
+          <FinanceInsightCard transactions={transactions} />
         </div>
       </section>
 
       <section className="grid gap-4 lg:grid-cols-2">
-        <CreditCardsPanel />
+        <CreditCardsPanel cards={[]} />
         <GoalsPanel metas={metas} />
       </section>
 
-      <RecentTransactions />
+      <RecentTransactions transactions={dashboardData.recentTransactions} />
     </div>
   )
 }

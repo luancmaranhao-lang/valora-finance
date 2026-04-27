@@ -59,10 +59,10 @@ function Metas() {
       setMessage("")
 
       await metasService.salvarMeta({
-        name: form.name.trim(),
-        target,
-        current: Number.isFinite(current) ? current : 0,
-        deadline: form.deadline,
+        nome: form.name.trim(),
+        valor_alvo: target,
+        valor_atual: Number.isFinite(current) ? current : 0,
+        prazo: form.deadline,
       })
 
       setForm(initialForm)
