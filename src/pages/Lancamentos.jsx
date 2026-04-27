@@ -11,6 +11,18 @@ import {
 import { supabase } from "../services/supabaseClient"
 
 const filters = ["Todos", "Pagos", "Pendentes", "Receitas", "Despesas", "Compartilhados", "Privados"]
+const subscriptionTag = "[ASSINATURA]"
+const categoryOptions = [
+  "🏠 Moradia",
+  "🛒 Mercado",
+  "🚗 Transporte",
+  "🍔 Alimentação",
+  "🏥 Saúde",
+  "🍿 Lazer",
+  "🎓 Educação",
+  "⚽ Hobby",
+  "🧾 Outros",
+]
 
 const initialFormData = {
   type: "Despesa",
@@ -18,11 +30,12 @@ const initialFormData = {
   paymentStatus: "Pendente",
   installments: "1",
   description: "",
-  category: "",
+  category: "🏠 Moradia",
   value: "",
   date: "",
   dueDay: "",
   paymentMethod: "",
+  isSubscription: false,
   visibility: "Privado",
   splitMethod: "Igual",
 }
@@ -81,12 +94,19 @@ function normalizeUiDate(value) {
   return raw.slice(0, 10)
 }
 
+function applySubscriptionTag(description, isSubscription) {
+  const baseDescription = String(description ?? "").replace(` ${subscriptionTag}`, "").trim()
+  return isSubscription ? `${baseDescription} ${subscriptionTag}` : baseDescription
+}
+
 function mapDbToUi(record) {
   const visibilityRaw = record.visibilidade ?? record.visibility ?? "privado"
   const splitMethodRaw = record.metodo_divisao ?? record.split_method ?? record.splitMethod ?? null
   const typeRaw = record.tipo ?? record.type ?? "despesa"
   const recurrenceRaw = record.recorrencia ?? "unica"
   const statusRaw = (record.status ?? "").toString().toLowerCase()
+  const rawDescription = record.descricao ?? record.description ?? ""
+  const hasSubscriptionTag = String(rawDescription).includes(subscriptionTag)
 
   return {
     id: record.id,
@@ -99,12 +119,13 @@ function mapDbToUi(record) {
           : recurrenceRaw === "parcelado"
             ? "Parcelado"
           : "Única",
-    description: record.descricao ?? record.description ?? "",
+    description: String(rawDescription).replace(` ${subscriptionTag}`, "").trim(),
     category: record.categoria ?? record.category ?? "",
     value: Number(record.valor ?? record.value ?? 0),
     date: normalizeUiDate(record.data ?? record.date),
     dueDay: String(record.dia_vencimento ?? ""),
     paymentStatus: statusRaw === "pago" ? "Pago" : "Pendente",
+    isSubscription: Boolean(record.assinatura ?? record.eh_assinatura ?? hasSubscriptionTag),
     paymentMethod: record.forma_pagamento ?? record.payment_method ?? record.paymentMethod ?? "",
     visibility:
       visibilityRaw === "compartilhado" ? "Compartilhar no relatório do grupo" : "Privado",
@@ -155,8 +176,11 @@ function Lancamentos() {
   }, [])
 
   function handleChange(event) {
-    const { name, value } = event.target
+    const { name, value, type, checked } = event.target
     setFormData((prev) => {
+      if (type === "checkbox") {
+        return { ...prev, [name]: checked }
+      }
       if (name === "recurrenceType") {
         if (value === "Parcelado") {
           const nextInstallments =
@@ -187,6 +211,7 @@ function Lancamentos() {
       date: transaction.date,
       dueDay: transaction.dueDay ?? "",
       paymentMethod: transaction.paymentMethod,
+      isSubscription: Boolean(transaction.isSubscription),
       visibility: transaction.visibility,
       splitMethod: transaction.splitMethod === "-" ? "Igual" : transaction.splitMethod,
     })
@@ -246,7 +271,7 @@ function Lancamentos() {
       const dbPayload = {
         user_id: user.id,
         tipo: tipoMap[formData.type] ?? "despesa",
-        descricao: formData.description.trim(),
+        descricao: applySubscriptionTag(formData.description.trim(), formData.isSubscription),
         categoria: formData.category.trim(),
         valor: normalizedValue,
         data: formattedDate,
@@ -382,13 +407,18 @@ function Lancamentos() {
 
           <label className="space-y-1.5">
             <span className="text-sm font-medium text-slate-700">Categoria</span>
-            <input
+            <select
               name="category"
               value={formData.category}
               onChange={handleChange}
-              placeholder="Ex: Alimentação"
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-slate-300"
-            />
+            >
+              {categoryOptions.map((category) => (
+                <option key={category} value={category}>
+                  {category}
+                </option>
+              ))}
+            </select>
           </label>
 
           <label className="space-y-1.5">
@@ -441,6 +471,17 @@ function Lancamentos() {
               placeholder="Ex: PIX, cartão, débito"
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-slate-300"
             />
+          </label>
+
+          <label className="mt-1 flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-700">
+            <input
+              name="isSubscription"
+              type="checkbox"
+              checked={formData.isSubscription}
+              onChange={handleChange}
+              className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-300"
+            />
+            Marcar como Assinatura/Serviço Recorrente
           </label>
 
           <label className="space-y-1.5">
@@ -524,6 +565,7 @@ function Lancamentos() {
                   <th className="px-3 py-2">Tipo</th>
                   <th className="px-3 py-2">Recorrência</th>
                   <th className="px-3 py-2">Pagamento</th>
+                  <th className="px-3 py-2">Assinatura</th>
                   <th className="px-3 py-2">Forma de pagamento</th>
                   <th className="px-3 py-2">Visibilidade</th>
                   <th className="px-3 py-2">Divisão</th>
@@ -547,6 +589,9 @@ function Lancamentos() {
                         label={transaction.paymentStatus}
                         tone={transaction.paymentStatus === "Pago" ? "success" : "warning"}
                       />
+                    </td>
+                    <td className="px-3 py-3">
+                      <StatusBadge label={transaction.isSubscription ? "Sim" : "Não"} tone={transaction.isSubscription ? "info" : "neutral"} />
                     </td>
                     <td className="px-3 py-3 text-slate-700">{transaction.paymentMethod}</td>
                     <td className="px-3 py-3">

@@ -11,6 +11,8 @@ import StatCard from "../components/StatCard"
 import { listarLancamentos } from "../services/lancamentosService"
 import { metasService } from "../services/metasService"
 
+const subscriptionTag = "[ASSINATURA]"
+
 function calculateVariation(current, previous) {
   if (previous === 0 && current > 0) return "+100%"
   if (previous === 0 && current === 0) return "0%"
@@ -99,6 +101,12 @@ function Dashboard() {
       ].join("|")
     }
 
+    function isMarkedAsSubscription(item) {
+      if (Boolean(item.assinatura ?? item.eh_assinatura)) return true
+      const description = String(item.descricao ?? item.description ?? "")
+      return description.includes(subscriptionTag)
+    }
+
     function projectedRecurringForMonth(allItems, year, month) {
       const recurringTypes = new Set(["recorrente_fixa", "recorrente_variavel"])
       const recurringExpenses = allItems.filter((item) => {
@@ -177,6 +185,19 @@ function Dashboard() {
       .sort((a, b) => new Date(b.data ?? b.date ?? 0) - new Date(a.data ?? a.date ?? 0))
       .slice(0, 6)
 
+    const monthlySubscriptions = currentMonthTransactions
+      .filter((item) => {
+        const recurrence = (item.recorrencia ?? "unica").toString().toLowerCase()
+        return recurrence === "recorrente_fixa" && isMarkedAsSubscription(item)
+      })
+      .map((item) => ({
+        id: item.id,
+        name: String(item.descricao ?? item.description ?? "Assinatura").replace(` ${subscriptionTag}`, "").trim(),
+        value: Number(item.valor ?? item.value ?? 0),
+      }))
+
+    const monthlySubscriptionsTotal = monthlySubscriptions.reduce((sum, item) => sum + item.value, 0)
+
     const quickSummary =
       forecastBalance >= 0
         ? "Fluxo projetado positivo para o mes atual."
@@ -208,6 +229,8 @@ function Dashboard() {
       quickSummary,
       recommendedActions,
       recentTransactions,
+      monthlySubscriptions,
+      monthlySubscriptionsTotal,
     }
   }, [transactions])
 
@@ -280,6 +303,33 @@ function Dashboard() {
             ))}
           </ul>
         </article>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h3 className="text-base font-semibold text-slate-900">Minhas Assinaturas</h3>
+          <p className="text-xs font-semibold text-slate-600">
+            Total no mês: {formatCurrency(dashboardData.monthlySubscriptionsTotal)}
+          </p>
+        </div>
+        {dashboardData.monthlySubscriptions.length === 0 ? (
+          <EmptyState
+            title="Nenhuma assinatura marcada"
+            description="Marque lançamentos recorrentes fixos como assinatura para monitorar este total."
+          />
+        ) : (
+          <div className="space-y-2">
+            {dashboardData.monthlySubscriptions.map((subscription) => (
+              <article
+                key={subscription.id}
+                className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5"
+              >
+                <p className="text-sm font-medium text-slate-800">{subscription.name}</p>
+                <p className="text-sm font-semibold text-slate-900">{formatCurrency(subscription.value)}</p>
+              </article>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="grid gap-4 xl:grid-cols-3">
