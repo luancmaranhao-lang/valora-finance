@@ -16,6 +16,7 @@ const initialFormData = {
   type: "Despesa",
   recurrenceType: "Única",
   paymentStatus: "Pendente",
+  installments: "1",
   description: "",
   category: "",
   value: "",
@@ -164,6 +165,7 @@ function Lancamentos() {
       type: transaction.type,
       recurrenceType: transaction.recurrenceType ?? "Única",
       paymentStatus: transaction.paymentStatus ?? "Pendente",
+      installments: "1",
       description: transaction.description,
       category: transaction.category,
       value: String(transaction.value),
@@ -195,7 +197,13 @@ function Lancamentos() {
 
     const normalizedValue = Number(formData.value)
     const normalizedDueDay = Number(formData.dueDay || 0)
+    const normalizedInstallments = Number(formData.installments || 1)
     if (!formData.description || !formData.category || !formData.date || !formData.paymentMethod || !normalizedValue) {
+      return
+    }
+    if (!Number.isInteger(normalizedInstallments) || normalizedInstallments < 1) {
+      setMessageType("error")
+      setMessage("Informe um número de parcelas válido (mínimo 1).")
       return
     }
     if (isRecurring && (!normalizedDueDay || normalizedDueDay < 1 || normalizedDueDay > 31)) {
@@ -228,6 +236,7 @@ function Lancamentos() {
         valor: normalizedValue,
         data: formattedDate,
         forma_pagamento: formData.paymentMethod.trim(),
+        numero_parcelas: formData.type === "Despesa" ? normalizedInstallments : 1,
         recorrencia: recurrenceMap[formData.recurrenceType] ?? "unica",
         dia_vencimento: isRecurring ? normalizedDueDay : null,
         status: paymentStatusMap[formData.paymentStatus] ?? "pendente",
@@ -328,6 +337,21 @@ function Lancamentos() {
               <option>Pago</option>
             </select>
           </label>
+
+          {formData.type === "Despesa" ? (
+            <label className="space-y-1.5">
+              <span className="text-sm font-medium text-slate-700">Número de parcelas</span>
+              <input
+                name="installments"
+                type="number"
+                min="1"
+                step="1"
+                value={formData.installments}
+                onChange={handleChange}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-slate-300"
+              />
+            </label>
+          ) : null}
 
           <label className="space-y-1.5">
             <span className="text-sm font-medium text-slate-700">Descrição</span>

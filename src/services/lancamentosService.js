@@ -39,7 +39,39 @@ function normalizeLancamentoPayload(lancamento = {}) {
     payload.data = normalizeDateOnly(payload.data)
   }
 
+  if ("numero_parcelas" in payload) {
+    payload.numero_parcelas =
+      payload.numero_parcelas === null || payload.numero_parcelas === undefined || payload.numero_parcelas === ""
+        ? 1
+        : Number(payload.numero_parcelas)
+  }
+
   return payload
+}
+
+function incrementDateByMonths(baseDate, monthsToAdd) {
+  const [year, month, day] = String(baseDate)
+    .slice(0, 10)
+    .split("-")
+    .map(Number)
+
+  const date = new Date(year, (month ?? 1) - 1 + monthsToAdd, day ?? 1)
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-")
+}
+
+function splitInstallments(totalValue, count) {
+  const valueInCents = Math.round(Number(totalValue) * 100)
+  const baseInCents = Math.floor(valueInCents / count)
+  const remainder = valueInCents - baseInCents * count
+
+  return Array.from({ length: count }, (_, idx) => {
+    const cents = baseInCents + (idx < remainder ? 1 : 0)
+    return cents / 100
+  })
 }
 
 export async function listarLancamentos() {
@@ -69,6 +101,36 @@ export async function listarLancamentos() {
 
 export async function criarLancamento(lancamento) {
   const payload = normalizeLancamentoPayload(lancamento)
+
+  const tipo = (payload.tipo ?? "").toString().toLowerCase()
+  const parcelas = Number(payload.numero_parcelas ?? 1)
+  const isInstallmentExpense = tipo === "despesa" && Number.isInteger(parcelas) && parcelas > 1
+
+  if (isInstallmentExpense) {
+    const installmentValues = splitInstallments(payload.valor ?? 0, parcelas)
+    const baseDescription = payload.descricao ?? "Despesa parcelada"
+    const baseDate = normalizeDateOnly(payload.data)
+    const firstStatus = payload.status ?? "pendente"
+    const basePayload = { ...payload }
+    delete basePayload.numero_parcelas
+
+    const parcelRows = installmentValues.map((installmentValue, idx) => ({
+      ...basePayload,
+      descricao: `${baseDescription} (${idx + 1}/${parcelas})`,
+      valor: installmentValue,
+      data: incrementDateByMonths(baseDate, idx),
+      status: idx === 0 ? firstStatus : "pendente",
+    }))
+
+    const { data, error } = await supabase.from("lancamentos").insert(parcelRows).select("*")
+    if (error) {
+      throw error
+    }
+
+    return data
+  }
+
+  delete payload.numero_parcelas
   const { data, error } = await supabase.from("lancamentos").insert(payload).select("*").single()
 
   if (error) {
