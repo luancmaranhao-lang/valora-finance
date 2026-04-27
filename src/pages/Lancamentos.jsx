@@ -15,6 +15,8 @@ const customCategoryOption = "__CUSTOM__"
 const payerTagPrefix = "[PAGADOR:"
 const splitTagPrefix = "[RATEIO:"
 const infoTag = "[INFORMATIVO:1]"
+const dividedPayerValue = "__DIVIDIDO__"
+const jointPayerValue = "__CONTA_CONJUNTA__"
 const categoryOptions = [
   "💼 Trabalho",
   "⚖️ Jurídico",
@@ -114,6 +116,10 @@ function removeMetaTags(text) {
   return String(text ?? "").replace(/\s*\[(PAGADOR|RATEIO):[^\]]+\]/g, "").replace(/\s*\[INFORMATIVO:1\]/g, "").trim()
 }
 
+function getFirstName(name) {
+  return String(name ?? "").trim().split(" ")[0] || "Parceiro(a)"
+}
+
 function buildDescriptionWithMeta(baseDescription, { payer, splitMethod, isDivided, isInformative }) {
   const clean = removeMetaTags(baseDescription)
   const parts = [clean]
@@ -180,6 +186,7 @@ function Lancamentos() {
   const [filter, setFilter] = useState("Todos")
   const [transactions, setTransactions] = useState([])
   const [payerOptions, setPayerOptions] = useState([])
+  const [currentUserId, setCurrentUserId] = useState("")
   const [formData, setFormData] = useState(initialFormData)
   const [customCategory, setCustomCategory] = useState("")
   const [editingId, setEditingId] = useState(null)
@@ -188,7 +195,7 @@ function Lancamentos() {
   const [message, setMessage] = useState("")
   const [messageType, setMessageType] = useState("neutral")
 
-  const isDivided = formData.payer === "Dividido"
+  const isDivided = formData.payer === dividedPayerValue
   const isRecurring = formData.recurrenceType === "Recorrente Fixa" || formData.recurrenceType === "Recorrente Variável"
   const isInstallment = formData.recurrenceType === "Parcelado"
 
@@ -223,8 +230,10 @@ function Lancamentos() {
 
           if (!user?.id) {
             setPayerOptions([])
+            setCurrentUserId("")
             return
           }
+          setCurrentUserId(user.id)
 
           const { data: memberEntry } = await supabase
             .from("membros_grupo")
@@ -245,24 +254,47 @@ function Lancamentos() {
               ? await supabase.from("profiles").select("id, nome_exibicao, email").in("id", userIds)
               : { data: [] }
 
-            options = (profiles ?? []).map((profile) => profile?.nome_exibicao || profile?.email || "Usuário")
+            options = (profiles ?? []).map((profile) => {
+              const displayName = profile?.nome_exibicao || profile?.email || "Parceiro(a)"
+              const isCurrent = profile?.id === user.id
+              return {
+                value: profile?.id ?? displayName,
+                label: isCurrent ? "Você" : getFirstName(displayName),
+                role: isCurrent ? "self" : "partner",
+              }
+            })
           } else {
             const { data: profile } = await supabase
               .from("profiles")
               .select("nome_exibicao, email")
               .eq("id", user.id)
               .maybeSingle()
-            options = [profile?.nome_exibicao || profile?.email || user.email || "Usuário"]
+            options = [
+              {
+                value: user.id,
+                label: "Você",
+                role: "self",
+              },
+            ]
           }
 
-          const uniqueOptions = Array.from(new Set(options.filter(Boolean)))
+          const uniqueOptions = options
+            .filter((option) => option?.value)
+            .reduce((acc, option) => {
+              if (!acc.some((existing) => existing.value === option.value)) {
+                acc.push(option)
+              }
+              return acc
+            }, [])
+
           setPayerOptions(uniqueOptions)
           setFormData((prev) => ({
             ...prev,
-            payer: prev.payer || uniqueOptions[0] || "",
+            payer: prev.payer || uniqueOptions[0]?.value || "",
           }))
         } catch {
           setPayerOptions([])
+          setCurrentUserId("")
         }
       }
 
@@ -290,7 +322,7 @@ function Lancamentos() {
         return {
           ...prev,
           payer: value,
-          splitMethod: value === "Dividido" ? prev.splitMethod || "50/50" : "50/50",
+          splitMethod: value === dividedPayerValue ? prev.splitMethod || "50/50" : "50/50",
         }
       }
       return { ...prev, [name]: value }
@@ -317,7 +349,7 @@ function Lancamentos() {
       type: transaction.type,
       recurrenceType: transaction.recurrenceType ?? "Única",
       paymentStatus: transaction.paymentStatus ?? "Pendente",
-      payer: transaction.payer || payerOptions[0] || "",
+      payer: transaction.payer || payerOptions[0]?.value || "",
       isInformative: Boolean(transaction.isInformative),
       installments: "1",
       description: transaction.description,
@@ -435,6 +467,35 @@ function Lancamentos() {
     return true
   })
 
+  function resolveResponsibleIndicator(transaction) {
+    if (transaction.payer === dividedPayerValue) {
+      return { label: "🤝", colorClass: "bg-emerald-500", title: "Dividido" }
+    }
+    if (transaction.payer === jointPayerValue) {
+      return { label: "CJ", colorClass: "bg-slate-500", title: "Conta conjunta" }
+    }
+
+    const option = payerOptions.find((payer) => payer.value === transaction.payer)
+    if (option?.role === "self" || transaction.payer === currentUserId) {
+      return { label: "V", colorClass: "bg-blue-500", title: "Você" }
+    }
+    if (option?.role === "partner") {
+      return {
+        label: getFirstName(option.label).slice(0, 1).toUpperCase(),
+        colorClass: "bg-violet-500",
+        title: option.label,
+      }
+    }
+    if (transaction.payer) {
+      return {
+        label: getFirstName(transaction.payer).slice(0, 1).toUpperCase(),
+        colorClass: "bg-violet-500",
+        title: getFirstName(transaction.payer),
+      }
+    }
+    return { label: "V", colorClass: "bg-blue-500", title: "Você" }
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -510,12 +571,15 @@ function Lancamentos() {
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-slate-300"
               >
                 {payerOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
+                  <option key={option.value} value={option.value}>
+                    {option.label}
                   </option>
                 ))}
-                <option>Conta Conjunta</option>
-                <option>Dividido</option>
+                {!payerOptions.some((option) => option.value === formData.payer) && formData.payer ? (
+                  <option value={formData.payer}>{getFirstName(formData.payer)}</option>
+                ) : null}
+                <option value={jointPayerValue}>Conta Conjunta</option>
+                <option value={dividedPayerValue}>Dividido</option>
               </select>
             </label>
           ) : null}
@@ -710,56 +774,43 @@ function Lancamentos() {
         {isLoading ? (
           <EmptyState title="Carregando lancamentos" description="Buscando movimentacoes mais recentes..." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full border-separate border-spacing-y-2 text-sm">
+          <div>
+            <table className="w-full border-separate border-spacing-y-1 text-sm">
               <thead>
                 <tr className="text-left text-xs uppercase tracking-wide text-slate-500">
-                  <th className="px-3 py-2">Data</th>
-                  <th className="px-3 py-2">Descrição</th>
-                  <th className="px-3 py-2">Categoria</th>
-                  <th className="px-3 py-2">Tipo</th>
-                  <th className="px-3 py-2">Recorrência</th>
-                  <th className="px-3 py-2">Pagamento</th>
-                  <th className="px-3 py-2">Responsável</th>
-                  <th className="px-3 py-2">Forma de pagamento</th>
-                  <th className="px-3 py-2">Visibilidade</th>
-                  <th className="px-3 py-2">Ações</th>
-                  <th className="px-3 py-2 text-right">Valor</th>
+                  <th className="px-2 py-2">Data</th>
+                  <th className="px-2 py-2">Descrição</th>
+                  <th className="hidden px-2 py-2 md:table-cell">Recorrência</th>
+                  <th className="hidden px-2 py-2 md:table-cell">Pagamento</th>
+                  <th className="hidden px-2 py-2 lg:table-cell">Categoria</th>
+                  <th className="hidden px-2 py-2 lg:table-cell">Ações</th>
+                  <th className="px-2 py-2 text-right">Valor</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredTransactions.map((transaction) => {
+                  const responsibleIndicator = resolveResponsibleIndicator(transaction)
                   return (
                     <tr key={transaction.id} className="rounded-xl border border-slate-200 bg-slate-50/40">
-                    <td className="rounded-l-xl px-3 py-3 text-slate-700">{transaction.date}</td>
-                    <td className="px-3 py-3 font-medium text-slate-900">{transaction.description}</td>
-                    <td className="px-3 py-3 text-slate-700">{transaction.category}</td>
-                    <td className="px-3 py-3">
-                      <StatusBadge label={transaction.type} tone={transaction.type === "Receita" ? "success" : "danger"} />
+                    <td className="rounded-l-xl px-2 py-2 text-xs text-slate-600 md:text-sm">{transaction.date}</td>
+                    <td className="px-2 py-2">
+                      <div className="flex items-center gap-2">
+                        <span
+                          title={responsibleIndicator.title}
+                          className={`inline-flex h-2.5 w-2.5 shrink-0 rounded-full ${responsibleIndicator.colorClass}`}
+                        />
+                        <p className="truncate text-sm font-medium text-slate-900">{transaction.description}</p>
+                      </div>
                     </td>
-                    <td className="px-3 py-3 text-slate-700">{transaction.recurrenceType}</td>
-                    <td className="px-3 py-3">
+                    <td className="hidden px-2 py-2 text-slate-700 md:table-cell">{transaction.recurrenceType}</td>
+                    <td className="hidden px-2 py-2 md:table-cell">
                       <StatusBadge
                         label={transaction.paymentStatus}
                         tone={transaction.paymentStatus === "Pago" ? "success" : "warning"}
                       />
                     </td>
-                    <td className="px-3 py-3">
-                      <StatusBadge
-                        label={`${transaction.payer || "Usuário"}${
-                          transaction.payer === "Dividido" ? ` • ${transaction.splitRule || "50/50"}` : ""
-                        }${transaction.isInformative ? " • Informativo" : ""}`}
-                        tone={transaction.payer === "Dividido" ? "info" : "neutral"}
-                      />
-                    </td>
-                    <td className="px-3 py-3 text-slate-700">{transaction.paymentMethod}</td>
-                    <td className="px-3 py-3">
-                      <StatusBadge
-                        label={transaction.visibility === "Privado" ? "Privado" : "Compartilhado"}
-                        tone={transaction.visibility === "Privado" ? "neutral" : "info"}
-                      />
-                    </td>
-                    <td className="px-3 py-3">
+                    <td className="hidden px-2 py-2 text-slate-700 lg:table-cell">{transaction.category}</td>
+                    <td className="hidden px-2 py-2 lg:table-cell">
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
@@ -777,7 +828,7 @@ function Lancamentos() {
                         </button>
                       </div>
                     </td>
-                    <td className="rounded-r-xl px-3 py-3 text-right font-semibold text-slate-900">
+                    <td className="rounded-r-xl px-2 py-2 text-right text-sm font-bold text-slate-900 md:text-base">
                       {formatCurrency(transaction.value)}
                     </td>
                     </tr>
