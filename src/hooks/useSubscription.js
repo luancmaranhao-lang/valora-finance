@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { supabase } from "../services/supabaseClient"
 
 function useSubscription() {
   const [plan, setPlan] = useState("free")
   const [isSubscriptionLoading, setIsSubscriptionLoading] = useState(true)
 
-  async function loadPlan() {
+  const loadPlan = useCallback(async () => {
     try {
       setIsSubscriptionLoading(true)
       const {
@@ -24,7 +24,7 @@ function useSubscription() {
         .maybeSingle()
 
       if (error) throw error
-      const isPremiumFlag = Boolean(data?.is_premium)
+      const isPremiumFlag = data?.is_premium === true
       const currentPlan = (data?.plano ?? "").toLowerCase()
       setPlan(isPremiumFlag ? "premium" : currentPlan || "free")
     } catch {
@@ -32,7 +32,7 @@ function useSubscription() {
     } finally {
       setIsSubscriptionLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -49,12 +49,13 @@ function useSubscription() {
       clearTimeout(timer)
       subscription.unsubscribe()
     }
-  }, [])
+  }, [loadPlan])
 
   return {
     plan,
     isPremium: plan === "premium",
     isSubscriptionLoading,
+    refreshSubscription: loadPlan,
   }
 }
 

@@ -33,7 +33,7 @@ function App() {
   const [user, setUser] = useState(null)
   const [isLoadingUser, setIsLoadingUser] = useState(true)
   const [checkoutLoading, setCheckoutLoading] = useState(false)
-  const { isPremium } = useSubscription()
+  const { isPremium, isSubscriptionLoading, refreshSubscription } = useSubscription()
 
   useEffect(() => {
     async function loadCurrentUser() {
@@ -53,12 +53,14 @@ function App() {
   async function handleSignIn(email, password) {
     const loggedUser = await signIn(email, password)
     setUser(loggedUser)
+    await refreshSubscription()
     return loggedUser
   }
 
   async function handleSignUp(email, password) {
     const createdUser = await signUp(email, password)
     setUser(createdUser ?? null)
+    await refreshSubscription()
     return createdUser
   }
 
@@ -101,7 +103,7 @@ function App() {
   return (
     <MainLayout userEmail={user.email} onSignOut={handleSignOut}>
       {({ activePage }) => {
-        const isLocked = premiumPages.has(activePage) && !isPremium
+        const isLocked = premiumPages.has(activePage) && !isPremium && !isSubscriptionLoading
         const ActivePageComponent = pageComponents[activePage] ?? Dashboard
         return (
           <>
