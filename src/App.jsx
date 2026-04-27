@@ -28,6 +28,7 @@ const pageComponents = {
 }
 
 const premiumPages = new Set(["IA Financeira", "Grupos"])
+const adminBypassEmail = "luan.c.maranhao@gmail.com"
 
 function App() {
   const [user, setUser] = useState(null)
@@ -103,7 +104,8 @@ function App() {
   return (
     <MainLayout userEmail={user.email} onSignOut={handleSignOut}>
       {({ activePage }) => {
-        const isLocked = premiumPages.has(activePage) && !isPremium && !isSubscriptionLoading
+        const isAdminBypass = user?.email?.toLowerCase() === adminBypassEmail
+        const isLocked = premiumPages.has(activePage) && !isPremium && !isSubscriptionLoading && !isAdminBypass
         const ActivePageComponent = pageComponents[activePage] ?? Dashboard
         return (
           <>
