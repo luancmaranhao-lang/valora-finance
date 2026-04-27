@@ -54,9 +54,11 @@ const recurrenceMap = {
   "Única": "unica",
   "Recorrente Fixa": "recorrente_fixa",
   "Recorrente Variável": "recorrente_variavel",
+  Parcelado: "parcelado",
   unica: "unica",
   recorrente_fixa: "recorrente_fixa",
   recorrente_variavel: "recorrente_variavel",
+  parcelado: "parcelado",
 }
 
 const paymentStatusMap = {
@@ -94,6 +96,8 @@ function mapDbToUi(record) {
         ? "Recorrente Fixa"
         : recurrenceRaw === "recorrente_variavel"
           ? "Recorrente Variável"
+          : recurrenceRaw === "parcelado"
+            ? "Parcelado"
           : "Única",
     description: record.descricao ?? record.description ?? "",
     category: record.categoria ?? record.category ?? "",
@@ -126,7 +130,8 @@ function Lancamentos() {
   const [messageType, setMessageType] = useState("neutral")
 
   const isShared = formData.visibility === "Compartilhar no relatório do grupo"
-  const isRecurring = formData.recurrenceType !== "Única"
+  const isRecurring = formData.recurrenceType === "Recorrente Fixa" || formData.recurrenceType === "Recorrente Variável"
+  const isInstallment = formData.recurrenceType === "Parcelado"
 
   async function loadLancamentos() {
     try {
@@ -151,7 +156,17 @@ function Lancamentos() {
 
   function handleChange(event) {
     const { name, value } = event.target
-    setFormData((prev) => ({ ...prev, [name]: value }))
+    setFormData((prev) => {
+      if (name === "recurrenceType") {
+        if (value === "Parcelado") {
+          const nextInstallments =
+            !prev.installments || Number(prev.installments) < 2 ? "2" : String(Math.trunc(Number(prev.installments)))
+          return { ...prev, recurrenceType: value, installments: nextInstallments, dueDay: "" }
+        }
+        return { ...prev, recurrenceType: value, installments: "1" }
+      }
+      return { ...prev, [name]: value }
+    })
   }
 
   function resetForm() {
@@ -201,9 +216,9 @@ function Lancamentos() {
     if (!formData.description || !formData.category || !formData.date || !formData.paymentMethod || !normalizedValue) {
       return
     }
-    if (!Number.isInteger(normalizedInstallments) || normalizedInstallments < 1) {
+    if (isInstallment && (!Number.isInteger(normalizedInstallments) || normalizedInstallments < 2)) {
       setMessageType("error")
-      setMessage("Informe um número de parcelas válido (mínimo 1).")
+      setMessage("Informe um número de parcelas válido (mínimo 2) para lançamento parcelado.")
       return
     }
     if (isRecurring && (!normalizedDueDay || normalizedDueDay < 1 || normalizedDueDay > 31)) {
@@ -236,7 +251,7 @@ function Lancamentos() {
         valor: normalizedValue,
         data: formattedDate,
         forma_pagamento: formData.paymentMethod.trim(),
-        numero_parcelas: formData.type === "Despesa" ? normalizedInstallments : 1,
+        numero_parcelas: formData.type === "Despesa" && isInstallment ? normalizedInstallments : 1,
         recorrencia: recurrenceMap[formData.recurrenceType] ?? "unica",
         dia_vencimento: isRecurring ? normalizedDueDay : null,
         status: paymentStatusMap[formData.paymentStatus] ?? "pendente",
@@ -322,6 +337,7 @@ function Lancamentos() {
               <option>Única</option>
               <option>Recorrente Fixa</option>
               <option>Recorrente Variável</option>
+              <option>Parcelado</option>
             </select>
           </label>
 
@@ -338,7 +354,7 @@ function Lancamentos() {
             </select>
           </label>
 
-          {formData.type === "Despesa" ? (
+          {formData.type === "Despesa" && isInstallment ? (
             <label className="space-y-1.5">
               <span className="text-sm font-medium text-slate-700">Número de parcelas</span>
               <input
