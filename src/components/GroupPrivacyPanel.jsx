@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from "react"
-import { collaborationConfig } from "../data/mockFinanceData"
 import { supabase } from "../services/supabaseClient"
 import SectionCard from "./SectionCard"
+
+const privacyRules = [
+  { id: "rule-1", label: "Cada lancamento nasce privado.", defaultPrivate: true, shareInGroupReport: false },
+  { id: "rule-2", label: "Voce decide o que compartilhar no relatorio do grupo.", defaultPrivate: true, shareInGroupReport: true },
+  { id: "rule-3", label: "Entradas sensiveis podem ser ocultadas.", defaultPrivate: true, hideIncomeEntry: true },
+]
+
+const splitMethods = ["Igual", "Proporcional", "Valor fixo"]
 
 function GroupPrivacyPanel() {
   const [groupData, setGroupData] = useState({
@@ -174,7 +181,7 @@ function GroupPrivacyPanel() {
         <section>
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Privacidade de contas e entradas</p>
           <div className="space-y-2">
-            {collaborationConfig.privacyRules.map((rule) => (
+            {privacyRules.map((rule) => (
               <article key={rule.id} className="rounded-xl border border-slate-200 p-3">
                 <p className="text-sm font-medium text-slate-800">{rule.label}</p>
                 <div className="mt-2 flex flex-wrap gap-2">
@@ -216,7 +223,7 @@ function GroupPrivacyPanel() {
         <section>
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Divisao de contas</p>
           <div className="flex flex-wrap gap-2">
-            {collaborationConfig.splitMethods.map((method) => (
+            {splitMethods.map((method) => (
               <span
                 key={method}
                 className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700"

@@ -76,6 +76,18 @@ function Metas() {
     }
   }
 
+  async function handleRemove(goalId) {
+    try {
+      setMessage("")
+      await metasService.removerMeta(goalId)
+      setMessage("Meta removida com sucesso!")
+      await loadMetas()
+      window.dispatchEvent(new Event("metas:updated"))
+    } catch (error) {
+      setMessage(error?.message || "Nao foi possivel remover a meta.")
+    }
+  }
+
   const enrichedGoals = useMemo(() => {
     const today = new Date()
     return goals.map((goal) => {
@@ -170,10 +182,19 @@ function Metas() {
                 <h3 className="text-base font-semibold text-slate-900">{goal.name}</h3>
                 <p className="text-xs text-slate-500">Prazo: {goal.deadline}</p>
               </div>
-              <StatusBadge
-                label={goal.status}
-                tone={goal.status === "Concluida" ? "success" : goal.status === "Atrasada" ? "danger" : "info"}
-              />
+              <div className="flex items-center gap-2">
+                <StatusBadge
+                  label={goal.status}
+                  tone={goal.status === "Concluida" ? "success" : goal.status === "Atrasada" ? "danger" : "info"}
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleRemove(goal.id)}
+                  className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition-all hover:bg-rose-100"
+                >
+                  Excluir
+                </button>
+              </div>
             </div>
 
             <div className="space-y-1 text-sm text-slate-600">

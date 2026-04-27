@@ -47,5 +47,18 @@ export const metasService = {
     if (error) throw error
     return data?.[0]
   },
+
+  async removerMeta(metaId) {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser()
+
+    if (userError) throw userError
+    if (!user?.id) throw new Error("Usuario nao autenticado.")
+
+    const { error } = await supabase.from("metas").delete().eq("id", metaId).eq("user_id", user.id)
+    if (error) throw error
+  },
 }
 
