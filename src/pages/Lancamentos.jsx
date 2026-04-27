@@ -10,11 +10,12 @@ import {
 } from "../services/lancamentosService"
 import { supabase } from "../services/supabaseClient"
 
-const filters = ["Todos", "Receitas", "Despesas", "Compartilhados", "Privados"]
+const filters = ["Todos", "Pagos", "Pendentes", "Receitas", "Despesas", "Compartilhados", "Privados"]
 
 const initialFormData = {
   type: "Despesa",
   recurrenceType: "Única",
+  paymentStatus: "Pendente",
   description: "",
   category: "",
   value: "",
@@ -57,6 +58,13 @@ const recurrenceMap = {
   recorrente_variavel: "recorrente_variavel",
 }
 
+const paymentStatusMap = {
+  Pago: "pago",
+  Pendente: "pendente",
+  pago: "pago",
+  pendente: "pendente",
+}
+
 function formatCurrency(value) {
   return new Intl.NumberFormat("pt-BR", {
     style: "currency",
@@ -89,6 +97,7 @@ function mapDbToUi(record) {
   const splitMethodRaw = record.metodo_divisao ?? record.split_method ?? record.splitMethod ?? null
   const typeRaw = record.tipo ?? record.type ?? "despesa"
   const recurrenceRaw = record.recorrencia ?? "unica"
+  const statusRaw = (record.status ?? "").toString().toLowerCase()
 
   return {
     id: record.id,
@@ -104,6 +113,7 @@ function mapDbToUi(record) {
     value: Number(record.valor ?? record.value ?? 0),
     date: String(record.data ?? record.date ?? "").slice(0, 10),
     dueDay: String(record.dia_vencimento ?? ""),
+    paymentStatus: statusRaw === "pago" ? "Pago" : "Pendente",
     paymentMethod: record.forma_pagamento ?? record.payment_method ?? record.paymentMethod ?? "",
     visibility:
       visibilityRaw === "compartilhado" ? "Compartilhar no relatório do grupo" : "Privado",
@@ -167,6 +177,7 @@ function Lancamentos() {
     setFormData({
       type: transaction.type,
       recurrenceType: transaction.recurrenceType ?? "Única",
+      paymentStatus: transaction.paymentStatus ?? "Pendente",
       description: transaction.description,
       category: transaction.category,
       value: String(transaction.value),
@@ -237,6 +248,7 @@ function Lancamentos() {
         forma_pagamento: formData.paymentMethod.trim(),
         recorrencia: recurrenceMap[formData.recurrenceType] ?? "unica",
         dia_vencimento: isRecurring ? normalizedDueDay : null,
+        status: paymentStatusMap[formData.paymentStatus] ?? "pendente",
         visibilidade: visibilityMap[formData.visibility] ?? "privado",
         metodo_divisao: isShared ? (divisionMethodMap[formData.splitMethod] ?? null) : null,
       }
@@ -262,6 +274,8 @@ function Lancamentos() {
 
   const filteredTransactions = transactions.filter((item) => {
     if (filter === "Todos") return true
+    if (filter === "Pagos") return item.paymentStatus === "Pago"
+    if (filter === "Pendentes") return item.paymentStatus === "Pendente"
     if (filter === "Receitas") return item.type === "Receita"
     if (filter === "Despesas") return item.type === "Despesa"
     if (filter === "Compartilhados") return item.visibility === "Compartilhar no relatório do grupo"
@@ -317,6 +331,19 @@ function Lancamentos() {
               <option>Única</option>
               <option>Recorrente Fixa</option>
               <option>Recorrente Variável</option>
+            </select>
+          </label>
+
+          <label className="space-y-1.5">
+            <span className="text-sm font-medium text-slate-700">Status</span>
+            <select
+              name="paymentStatus"
+              value={formData.paymentStatus}
+              onChange={handleChange}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-slate-300"
+            >
+              <option>Pendente</option>
+              <option>Pago</option>
             </select>
           </label>
 
@@ -475,6 +502,7 @@ function Lancamentos() {
                   <th className="px-3 py-2">Tipo</th>
                   <th className="px-3 py-2">Recorrência</th>
                   <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2">Pagamento</th>
                   <th className="px-3 py-2">Forma de pagamento</th>
                   <th className="px-3 py-2">Visibilidade</th>
                   <th className="px-3 py-2">Divisão</th>
@@ -497,6 +525,12 @@ function Lancamentos() {
                     <td className="px-3 py-3 text-slate-700">{transaction.recurrenceType}</td>
                     <td className="px-3 py-3">
                       <StatusBadge label={recurrenceStatus.label} tone={recurrenceStatus.tone} />
+                    </td>
+                    <td className="px-3 py-3">
+                      <StatusBadge
+                        label={transaction.paymentStatus}
+                        tone={transaction.paymentStatus === "Pago" ? "success" : "warning"}
+                      />
                     </td>
                     <td className="px-3 py-3 text-slate-700">{transaction.paymentMethod}</td>
                     <td className="px-3 py-3">

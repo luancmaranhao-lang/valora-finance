@@ -3,7 +3,6 @@ import { useState } from "react"
 const menuItems = [
   "Dashboard",
   "Lançamentos",
-  "Contas",
   "Cartões",
   "Metas",
   "Relatórios",

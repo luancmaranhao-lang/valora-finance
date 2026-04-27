@@ -5,7 +5,6 @@ import MainLayout from "./layouts/MainLayout"
 import Dashboard from "./pages/Dashboard"
 import Cartoes from "./pages/Cartoes"
 import Configuracoes from "./pages/Configuracoes"
-import Contas from "./pages/Contas"
 import Grupos from "./pages/Grupos"
 import IAFinanceira from "./pages/IAFinanceira"
 import Lancamentos from "./pages/Lancamentos"
@@ -18,7 +17,6 @@ import { createCheckoutSession } from "./services/stripeService"
 const pageComponents = {
   Dashboard,
   Lançamentos: Lancamentos,
-  Contas,
   Cartões: Cartoes,
   Metas,
   Relatórios: Relatorios,

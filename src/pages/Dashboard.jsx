@@ -8,7 +8,6 @@ import PageHeader from "../components/PageHeader"
 import PlanningAlertCard from "../components/PlanningAlertCard"
 import RecentTransactions from "../components/RecentTransactions"
 import StatCard from "../components/StatCard"
-import { listarContas } from "../services/contasService"
 import { listarLancamentos } from "../services/lancamentosService"
 import { metasService } from "../services/metasService"
 
@@ -27,7 +26,6 @@ function formatCurrency(value) {
 
 function Dashboard() {
   const [transactions, setTransactions] = useState([])
-  const [accounts, setAccounts] = useState([])
   const [metas, setMetas] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState("")
@@ -36,13 +34,8 @@ function Dashboard() {
     try {
       setIsLoading(true)
       setErrorMessage("")
-      const [transactionsData, accountsData, metasData] = await Promise.all([
-        listarLancamentos(),
-        listarContas(),
-        metasService.listarMetas(),
-      ])
+      const [transactionsData, metasData] = await Promise.all([listarLancamentos(), metasService.listarMetas()])
       setTransactions(transactionsData ?? [])
-      setAccounts(accountsData ?? [])
       setMetas(metasData ?? [])
     } catch {
       setErrorMessage("Nao foi possivel carregar os indicadores financeiros agora.")
@@ -140,7 +133,7 @@ function Dashboard() {
       return projected
     }
 
-    function sumPendingAccounts(items) {
+    function sumPendingByStatus(items) {
       return items.reduce((sum, item) => {
         const status = (item.status ?? "").toString().toLowerCase()
         if (!pendingStatuses.has(status)) return sum
@@ -154,12 +147,14 @@ function Dashboard() {
     const previousMonthTransactions = transactions.filter((item) =>
       isFromMonth(item.data ?? item.date, previousYear, previousMonth),
     )
-    const currentMonthAccounts = accounts.filter((item) =>
-      isFromMonth(item.vencimento ?? item.dueDate, currentYear, currentMonth),
-    )
-    const previousMonthAccounts = accounts.filter((item) =>
-      isFromMonth(item.vencimento ?? item.dueDate, previousYear, previousMonth),
-    )
+    const currentMonthPendingTransactions = currentMonthTransactions.filter((item) => {
+      const status = (item.status ?? "").toString().toLowerCase()
+      return pendingStatuses.has(status)
+    })
+    const previousMonthPendingTransactions = previousMonthTransactions.filter((item) => {
+      const status = (item.status ?? "").toString().toLowerCase()
+      return pendingStatuses.has(status)
+    })
 
     const monthlyIncome = sumByType(currentMonthTransactions, "receita")
     const monthlyRealExpenses = sumByType(currentMonthTransactions, "despesa")
@@ -169,14 +164,13 @@ function Dashboard() {
     const previousRealExpenses = sumByType(previousMonthTransactions, "despesa")
     const previousProjectedRecurring = projectedRecurringForMonth(transactions, previousYear, previousMonth)
     const previousExpenses = previousRealExpenses + previousProjectedRecurring
-    const monthlyPendingAccounts = sumPendingAccounts(currentMonthAccounts)
-    const previousPending = sumPendingAccounts(previousMonthAccounts)
+    const monthlyPendingAccounts = sumPendingByStatus(currentMonthPendingTransactions)
+    const previousPending = sumPendingByStatus(previousMonthPendingTransactions)
     const forecastBalance = monthlyIncome - monthlyExpenses - monthlyPendingAccounts
     const previousForecast = previousIncome - previousExpenses - previousPending
 
-    const upcomingAccounts = accounts
-      .filter((item) => pendingStatuses.has((item.status ?? "").toString().toLowerCase()))
-      .sort((a, b) => new Date(a.vencimento ?? a.dueDate) - new Date(b.vencimento ?? b.dueDate))
+    const upcomingAccounts = currentMonthPendingTransactions
+      .sort((a, b) => new Date(a.data ?? a.date) - new Date(b.data ?? b.date))
       .slice(0, 5)
 
     const recentTransactions = [...transactions]
@@ -196,7 +190,7 @@ function Dashboard() {
         ? "Reavalie despesas variaveis para preservar margem de seguranca."
         : "Seu nivel de despesas esta equilibrado frente a receita.",
       upcomingAccounts.length > 0
-        ? `Proximo vencimento: ${String(upcomingAccounts[0].vencimento ?? upcomingAccounts[0].dueDate ?? "").slice(0, 10)}.`
+        ? `Proximo vencimento: ${String(upcomingAccounts[0].data ?? upcomingAccounts[0].date ?? "").slice(0, 10)}.`
         : "Sem vencimentos proximos mapeados no momento.",
     ]
 
@@ -215,7 +209,7 @@ function Dashboard() {
       recommendedActions,
       recentTransactions,
     }
-  }, [transactions, accounts])
+  }, [transactions])
 
   const pendingTone = dashboardData.monthlyPendingAccounts > 0 ? "negative" : "neutral"
   const forecastTone = dashboardData.forecastBalance >= 0 ? "positive" : "negative"
@@ -313,9 +307,9 @@ function Dashboard() {
                 className="flex flex-col gap-2 rounded-xl border border-slate-200 p-3 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div>
-                  <p className="text-sm font-semibold text-slate-900">{account.nome ?? account.name ?? "Conta"}</p>
+                  <p className="text-sm font-semibold text-slate-900">{account.descricao ?? account.description ?? "Lancamento"}</p>
                   <p className="text-xs text-slate-500">
-                    Vencimento: {String(account.vencimento ?? account.dueDate ?? "").slice(0, 10)}
+                    Vencimento: {String(account.data ?? account.date ?? "").slice(0, 10)}
                   </p>
                 </div>
                 <p className="text-sm font-semibold text-slate-900">
