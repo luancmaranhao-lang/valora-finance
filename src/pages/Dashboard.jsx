@@ -10,6 +10,14 @@ import RecentTransactions from "../components/RecentTransactions"
 import StatCard from "../components/StatCard"
 import { listarLancamentos } from "../services/lancamentosService"
 import { metasService } from "../services/metasService"
+import { supabase } from "../services/supabaseClient"
+import {
+  extractTagValue,
+  getFirstName,
+  payerTagPrefix,
+  removeLancamentoMetaTags,
+  resolvePayerShortLabel,
+} from "../utils/lancamentoDisplay"
 
 const subscriptionCategory = "🔄 Assinaturas"
 
@@ -26,11 +34,25 @@ function formatCurrency(value) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value)
 }
 
+function profileFirstLabel(profile, authUserId) {
+  const nome = String(profile?.nome_exibicao ?? "").trim()
+  if (nome) return profile?.id === authUserId ? "Você" : getFirstName(nome)
+  const email = String(profile?.email ?? "")
+  if (email) {
+    const local = email.split("@")[0]
+    const pretty = local ? local.charAt(0).toUpperCase() + local.slice(1) : ""
+    if (pretty) return profile?.id === authUserId ? "Você" : pretty
+  }
+  return profile?.id === authUserId ? "Você" : "Parceiro(a)"
+}
+
 function Dashboard() {
   const [transactions, setTransactions] = useState([])
   const [metas, setMetas] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState("")
+  const [currentUserId, setCurrentUserId] = useState("")
+  const [nameByUserId, setNameByUserId] = useState({})
 
   const loadDashboardData = useCallback(async () => {
     try {
@@ -62,6 +84,61 @@ function Dashboard() {
       window.removeEventListener("metas:updated", handleMetasUpdated)
     }
   }, [loadDashboardData])
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      async function loadProfileLabels() {
+        try {
+          const {
+            data: { user },
+          } = await supabase.auth.getUser()
+          if (!user?.id) {
+            setCurrentUserId("")
+            setNameByUserId({})
+            return
+          }
+          setCurrentUserId(user.id)
+
+          const { data: memberEntry } = await supabase
+            .from("membros_grupo")
+            .select("grupo_id")
+            .eq("user_id", user.id)
+            .maybeSingle()
+
+          let profiles = []
+          if (memberEntry?.grupo_id) {
+            const { data: membersRows } = await supabase
+              .from("membros_grupo")
+              .select("user_id")
+              .eq("grupo_id", memberEntry.grupo_id)
+            const userIds = (membersRows ?? []).map((m) => m.user_id).filter(Boolean)
+            const { data } = userIds.length
+              ? await supabase.from("profiles").select("id, nome_exibicao, email").in("id", userIds)
+              : { data: [] }
+            profiles = data ?? []
+          } else {
+            const { data } = await supabase
+              .from("profiles")
+              .select("id, nome_exibicao, email")
+              .eq("id", user.id)
+              .maybeSingle()
+            profiles = data ? [data] : []
+          }
+
+          const map = {}
+          for (const p of profiles) {
+            if (p?.id) map[p.id] = profileFirstLabel(p, user.id)
+          }
+          setNameByUserId(map)
+        } catch {
+          setCurrentUserId("")
+          setNameByUserId({})
+        }
+      }
+      void loadProfileLabels()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [])
 
   const dashboardData = useMemo(() => {
     const now = new Date()
@@ -179,6 +256,30 @@ function Dashboard() {
       .sort((a, b) => new Date(b.data ?? b.date ?? 0) - new Date(a.data ?? a.date ?? 0))
       .slice(0, 6)
 
+    const recentForUi = recentTransactions.map((item) => {
+      const rawDesc = item.descricao ?? item.description ?? ""
+      return {
+        ...item,
+        displayDescription: removeLancamentoMetaTags(rawDesc),
+        payerChip: resolvePayerShortLabel(extractTagValue(rawDesc, payerTagPrefix), {
+          currentUserId,
+          nameByUserId,
+        }),
+      }
+    })
+
+    const upcomingForUi = upcomingAccounts.map((acc) => {
+      const rawDesc = acc.descricao ?? acc.description ?? ""
+      return {
+        ...acc,
+        displayDesc: removeLancamentoMetaTags(rawDesc),
+        payerChip: resolvePayerShortLabel(extractTagValue(rawDesc, payerTagPrefix), {
+          currentUserId,
+          nameByUserId,
+        }),
+      }
+    })
+
     const monthlySubscriptions = currentMonthTransactions
       .filter((item) => {
         const recurrence = (item.recorrencia ?? "unica").toString().toLowerCase()
@@ -187,7 +288,7 @@ function Dashboard() {
       })
       .map((item) => ({
         id: item.id,
-        name: String(item.descricao ?? item.description ?? "Assinatura").replace(" [ASSINATURA]", "").trim(),
+        name: removeLancamentoMetaTags(String(item.descricao ?? item.description ?? "Assinatura")).trim(),
         value: Number(item.valor ?? item.value ?? 0),
       }))
 
@@ -220,14 +321,15 @@ function Dashboard() {
       expensesVariation: calculateVariation(monthlyExpenses, previousExpenses),
       pendingVariation: calculateVariation(monthlyPendingAccounts, previousPending),
       forecastVariation: calculateVariation(forecastBalance, previousForecast),
-      upcomingAccounts,
+      upcomingAccounts: upcomingForUi,
       quickSummary,
       recommendedActions,
       recentTransactions,
+      recentForUi,
       monthlySubscriptions,
       monthlySubscriptionsTotal,
     }
-  }, [transactions])
+  }, [transactions, currentUserId, nameByUserId])
 
   const pendingTone = dashboardData.monthlyPendingAccounts > 0 ? "negative" : "neutral"
   const forecastTone = dashboardData.forecastBalance >= 0 ? "positive" : "negative"
@@ -351,9 +453,29 @@ function Dashboard() {
                 key={account.id}
                 className="flex flex-col gap-2 rounded-xl border border-slate-200 p-3 sm:flex-row sm:items-center sm:justify-between"
               >
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">{account.descricao ?? account.description ?? "Lancamento"}</p>
-                  <p className="text-xs text-slate-500">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    {account.payerChip ? (
+                      <span
+                        title={account.payerChip.label}
+                        className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                          account.payerChip.tone === "partner"
+                            ? "bg-violet-100 text-violet-800"
+                            : account.payerChip.tone === "split"
+                              ? "bg-emerald-100 text-emerald-800"
+                              : account.payerChip.tone === "joint"
+                                ? "bg-slate-200 text-slate-700"
+                                : "bg-blue-100 text-blue-800"
+                        }`}
+                      >
+                        {account.payerChip.initial}
+                      </span>
+                    ) : null}
+                    <p className="min-w-0 truncate text-sm font-semibold text-slate-900">
+                      {account.displayDesc || "Lançamento"}
+                    </p>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500">
                     Vencimento: {String(account.data ?? account.date ?? "").slice(0, 10)}
                   </p>
                 </div>
@@ -377,7 +499,7 @@ function Dashboard() {
         <GoalsPanel metas={metas} />
       </section>
 
-      <RecentTransactions transactions={dashboardData.recentTransactions} />
+      <RecentTransactions transactions={dashboardData.recentForUi} payerMeta={{ compact: false }} />
     </div>
   )
 }

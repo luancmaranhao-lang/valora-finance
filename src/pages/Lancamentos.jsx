@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import AnnualSummaryModal from "../components/AnnualSummaryModal"
 import EmptyState from "../components/EmptyState"
 import PageHeader from "../components/PageHeader"
 import StatusBadge from "../components/StatusBadge"
@@ -9,14 +10,20 @@ import {
   removerLancamento,
 } from "../services/lancamentosService"
 import { supabase } from "../services/supabaseClient"
+import {
+  dividedPayerValue,
+  extractTagValue,
+  getFirstName,
+  infoTag,
+  jointPayerValue,
+  payerTagPrefix,
+  removeLancamentoMetaTags,
+  resolvePayerShortLabel,
+  splitTagPrefix,
+} from "../utils/lancamentoDisplay"
 
 const filters = ["Todos", "Pagos", "Pendentes", "Receitas", "Despesas", "Compartilhados", "Privados"]
 const customCategoryOption = "__CUSTOM__"
-const payerTagPrefix = "[PAGADOR:"
-const splitTagPrefix = "[RATEIO:"
-const infoTag = "[INFORMATIVO:1]"
-const dividedPayerValue = "__DIVIDIDO__"
-const jointPayerValue = "__CONTA_CONJUNTA__"
 const categoryOptions = [
   "💼 Trabalho",
   "⚖️ Jurídico",
@@ -103,25 +110,8 @@ function normalizeUiDate(value) {
   return raw.slice(0, 10)
 }
 
-function extractTagValue(text, prefix) {
-  const input = String(text ?? "")
-  const start = input.indexOf(prefix)
-  if (start === -1) return ""
-  const end = input.indexOf("]", start)
-  if (end === -1) return ""
-  return input.slice(start + prefix.length, end).trim()
-}
-
-function removeMetaTags(text) {
-  return String(text ?? "").replace(/\s*\[(PAGADOR|RATEIO):[^\]]+\]/g, "").replace(/\s*\[INFORMATIVO:1\]/g, "").trim()
-}
-
-function getFirstName(name) {
-  return String(name ?? "").trim().split(" ")[0] || "Parceiro(a)"
-}
-
 function buildDescriptionWithMeta(baseDescription, { payer, splitMethod, isDivided, isInformative }) {
-  const clean = removeMetaTags(baseDescription)
+  const clean = removeLancamentoMetaTags(baseDescription)
   const parts = [clean]
 
   if (payer) {
@@ -147,6 +137,7 @@ function mapDbToUi(record) {
   const payerFromTag = extractTagValue(rawDescription, payerTagPrefix)
   const splitFromTag = extractTagValue(rawDescription, splitTagPrefix)
   const isInformative = String(rawDescription).includes(infoTag)
+  const isProjected = Boolean(record._projected)
 
   return {
     id: record.id,
@@ -159,7 +150,7 @@ function mapDbToUi(record) {
           : recurrenceRaw === "parcelado"
             ? "Parcelado"
           : "Única",
-    description: removeMetaTags(rawDescription),
+    description: removeLancamentoMetaTags(rawDescription),
     category: record.categoria ?? record.category ?? "",
     value: Number(record.valor ?? record.value ?? 0),
     date: normalizeUiDate(record.data ?? record.date),
@@ -179,12 +170,109 @@ function mapDbToUi(record) {
             : "-",
     splitRule: splitFromTag || "50/50",
     isInformative,
+    isProjected,
   }
+}
+
+function parseUiDate(value) {
+  const raw = String(value ?? "").slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null
+  const [y, m, d] = raw.split("-").map(Number)
+  const date = new Date(y, m - 1, d)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function isPastCalendarMonth(year, monthIndex, ref = new Date()) {
+  if (year < ref.getFullYear()) return true
+  if (year > ref.getFullYear()) return false
+  return monthIndex < ref.getMonth()
+}
+
+function isDateInMonth(isoDate, year, monthIndex) {
+  const date = parseUiDate(isoDate)
+  if (!date) return false
+  return date.getFullYear() === year && date.getMonth() === monthIndex
+}
+
+function buildRecurringKeyRaw(item) {
+  const desc = removeLancamentoMetaTags(item.descricao ?? item.description ?? "")
+    .trim()
+    .toLowerCase()
+  return [
+    desc,
+    (item.categoria ?? item.category ?? "").toString().trim().toLowerCase(),
+    (item.forma_pagamento ?? item.payment_method ?? item.paymentMethod ?? "").toString().trim().toLowerCase(),
+    "recorrente_fixa",
+  ].join("|")
+}
+
+function isDespesaRecorrenteFixa(item) {
+  const tipo = (item.tipo ?? item.type ?? "").toString().toLowerCase()
+  const rec = (item.recorrencia ?? "unica").toString().toLowerCase()
+  return tipo === "despesa" && rec === "recorrente_fixa"
+}
+
+function lastDayOfMonth(year, monthIndex) {
+  return new Date(year, monthIndex + 1, 0).getDate()
+}
+
+function simpleKeyHash(str) {
+  let h = 0
+  for (let i = 0; i < str.length; i += 1) {
+    h = (Math.imul(31, h) + str.charCodeAt(i)) | 0
+  }
+  return Math.abs(h).toString(36)
+}
+
+function buildProjectedRawRows(allRaw, year, monthIndex, now = new Date()) {
+  if (isPastCalendarMonth(year, monthIndex, now)) return []
+
+  const recurring = allRaw.filter(isDespesaRecorrenteFixa)
+  if (recurring.length === 0) return []
+
+  const sortedByDateDesc = [...recurring].sort(
+    (a, b) => new Date(b.data ?? b.date ?? 0) - new Date(a.data ?? a.date ?? 0),
+  )
+  const latestTemplateByKey = new Map()
+  sortedByDateDesc.forEach((item) => {
+    const key = buildRecurringKeyRaw(item)
+    if (!latestTemplateByKey.has(key)) latestTemplateByKey.set(key, item)
+  })
+
+  const existingKeys = new Set()
+  for (const item of allRaw) {
+    const iso = normalizeUiDate(item.data ?? item.date)
+    if (!isDateInMonth(iso, year, monthIndex)) continue
+    if (isDespesaRecorrenteFixa(item)) {
+      existingKeys.add(buildRecurringKeyRaw(item))
+    }
+  }
+
+  const projected = []
+  const dueDayFallback = 1
+  latestTemplateByKey.forEach((template, key) => {
+    if (existingKeys.has(key)) return
+    const due = Number(template.dia_vencimento ?? dueDayFallback) || dueDayFallback
+    const safeDay = Math.min(Math.max(1, due), lastDayOfMonth(year, monthIndex))
+    const dataIso = `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(safeDay).padStart(2, "0")}`
+    const safeId = `proj-${simpleKeyHash(key)}-${year}-${monthIndex + 1}`
+
+    projected.push({
+      ...template,
+      id: safeId,
+      data: dataIso,
+      status: "pendente",
+      recorrencia: "recorrente_fixa",
+      _projected: true,
+    })
+  })
+
+  return projected
 }
 
 function Lancamentos() {
   const [filter, setFilter] = useState("Todos")
-  const [transactions, setTransactions] = useState([])
+  const [rawTransactions, setRawTransactions] = useState([])
   const [payerOptions, setPayerOptions] = useState([])
   const [currentUserId, setCurrentUserId] = useState("")
   const [formData, setFormData] = useState(initialFormData)
@@ -194,6 +282,36 @@ function Lancamentos() {
   const [isSaving, setIsSaving] = useState(false)
   const [message, setMessage] = useState("")
   const [messageType, setMessageType] = useState("neutral")
+  const [viewYM, setViewYM] = useState(() => {
+    const d = new Date()
+    return { y: d.getFullYear(), m: d.getMonth() }
+  })
+  const [annualOpen, setAnnualOpen] = useState(false)
+
+  const transactions = useMemo(() => rawTransactions.map(mapDbToUi), [rawTransactions])
+
+  const nameByUserId = useMemo(() => {
+    const map = {}
+    for (const option of payerOptions) {
+      if (!option?.value) continue
+      if (option.value === dividedPayerValue || option.value === jointPayerValue) continue
+      map[option.value] = option.label
+    }
+    return map
+  }, [payerOptions])
+
+  const monthScopedRows = useMemo(() => {
+    const { y, m } = viewYM
+    const inMonthReal = transactions.filter((row) => isDateInMonth(row.date, y, m))
+    const projectedRaw = buildProjectedRawRows(rawTransactions, y, m)
+    const projectedUi = projectedRaw.map(mapDbToUi)
+    const merged = [...projectedUi, ...inMonthReal].sort((a, b) => {
+      const da = parseUiDate(a.date)?.getTime() ?? 0
+      const db = parseUiDate(b.date)?.getTime() ?? 0
+      return da - db
+    })
+    return merged
+  }, [transactions, rawTransactions, viewYM])
 
   const isDivided = formData.payer === dividedPayerValue
   const isRecurring = formData.recurrenceType === "Recorrente Fixa" || formData.recurrenceType === "Recorrente Variável"
@@ -203,7 +321,7 @@ function Lancamentos() {
     try {
       setIsLoading(true)
       const data = await listarLancamentos()
-      setTransactions((data ?? []).map(mapDbToUi))
+      setRawTransactions(data ?? [])
     } catch (error) {
       setMessageType("error")
       setMessage(error?.message || "Não foi possível carregar os lançamentos agora.")
@@ -343,6 +461,11 @@ function Lancamentos() {
   }
 
   function handleEdit(transaction) {
+    if (transaction.isProjected) {
+      setMessageType("error")
+      setMessage("Itens previstos não podem ser editados. Cadastre o lançamento real no mês ou ajuste o modelo em um mês anterior.")
+      return
+    }
     const isDefaultCategory = categoryOptions.includes(transaction.category)
     setEditingId(transaction.id)
     setFormData({
@@ -365,6 +488,11 @@ function Lancamentos() {
   }
 
   async function handleRemove(id) {
+    if (String(id).startsWith("proj-")) {
+      setMessageType("error")
+      setMessage("Itens previstos não podem ser removidos.")
+      return
+    }
     try {
       setMessage("")
       await removerLancamento(id)
@@ -456,7 +584,7 @@ function Lancamentos() {
     }
   }
 
-  const filteredTransactions = transactions.filter((item) => {
+  const filteredTransactions = monthScopedRows.filter((item) => {
     if (filter === "Todos") return true
     if (filter === "Pagos") return item.paymentStatus === "Pago"
     if (filter === "Pendentes") return item.paymentStatus === "Pendente"
@@ -468,33 +596,43 @@ function Lancamentos() {
   })
 
   function resolveResponsibleIndicator(transaction) {
-    if (transaction.payer === dividedPayerValue) {
-      return { label: "🤝", colorClass: "bg-emerald-500", title: "Dividido" }
+    const resolved = resolvePayerShortLabel(transaction.payer, { currentUserId, nameByUserId })
+    if (resolved.tone === "split") {
+      return { label: "🤝", colorClass: "bg-emerald-500", title: resolved.label }
     }
-    if (transaction.payer === jointPayerValue) {
-      return { label: "CJ", colorClass: "bg-slate-500", title: "Conta conjunta" }
+    if (resolved.tone === "joint") {
+      return { label: "CJ", colorClass: "bg-slate-500", title: resolved.label }
     }
-
-    const option = payerOptions.find((payer) => payer.value === transaction.payer)
-    if (option?.role === "self" || transaction.payer === currentUserId) {
-      return { label: "V", colorClass: "bg-blue-500", title: "Você" }
+    if (resolved.tone === "self") {
+      return { label: resolved.initial, colorClass: "bg-blue-500", title: resolved.label }
     }
-    if (option?.role === "partner") {
-      return {
-        label: getFirstName(option.label).slice(0, 1).toUpperCase(),
-        colorClass: "bg-violet-500",
-        title: option.label,
-      }
+    return {
+      label: resolved.initial,
+      colorClass: "bg-violet-500",
+      title: resolved.label,
     }
-    if (transaction.payer) {
-      return {
-        label: getFirstName(transaction.payer).slice(0, 1).toUpperCase(),
-        colorClass: "bg-violet-500",
-        title: getFirstName(transaction.payer),
-      }
-    }
-    return { label: "V", colorClass: "bg-blue-500", title: "Você" }
   }
+
+  function shiftViewMonth(delta) {
+    setViewYM(({ y, m }) => {
+      let nm = m + delta
+      let ny = y
+      while (nm < 0) {
+        nm += 12
+        ny -= 1
+      }
+      while (nm > 11) {
+        nm -= 12
+        ny += 1
+      }
+      return { y: ny, m: nm }
+    })
+  }
+
+  const monthTitle = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(
+    new Date(viewYM.y, viewYM.m, 1),
+  )
+  const summaryYear = new Date().getFullYear()
 
   return (
     <div className="space-y-6">
@@ -502,6 +640,37 @@ function Lancamentos() {
         title="Lançamentos"
         subtitle="Registre receitas, despesas e defina o que será privado ou compartilhado."
       />
+
+      <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center justify-center gap-1 sm:justify-start">
+          <button
+            type="button"
+            aria-label="Mês anterior"
+            onClick={() => shiftViewMonth(-1)}
+            className="flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-slate-200 text-lg font-semibold text-slate-800 transition hover:bg-slate-100"
+          >
+            ‹
+          </button>
+          <span className="min-w-[12rem] select-none px-2 text-center text-sm font-semibold capitalize text-slate-900 sm:text-base">
+            {monthTitle}
+          </span>
+          <button
+            type="button"
+            aria-label="Próximo mês"
+            onClick={() => shiftViewMonth(1)}
+            className="flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-slate-200 text-lg font-semibold text-slate-800 transition hover:bg-slate-100"
+          >
+            ›
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={() => setAnnualOpen(true)}
+          className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-center text-sm font-semibold text-slate-800 transition hover:bg-slate-100"
+        >
+          Ver resumo anual
+        </button>
+      </div>
 
       {message ? (
         <div
@@ -754,6 +923,10 @@ function Lancamentos() {
       </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <p className="mb-3 text-xs text-slate-500">
+          Exibindo o mês selecionado. Em meses atuais ou futuros, despesas <strong>Recorrente Fixa</strong> sem lançamento
+          real aparecem como <strong>Previsto</strong>. Parcelas de compras parceladas aparecem na data de cada parcela.
+        </p>
         <div className="mb-4 flex flex-wrap gap-2">
           {filters.map((item) => (
             <button
@@ -804,29 +977,36 @@ function Lancamentos() {
                     </td>
                     <td className="hidden px-2 py-2 text-slate-700 md:table-cell">{transaction.recurrenceType}</td>
                     <td className="hidden px-2 py-2 md:table-cell">
-                      <StatusBadge
-                        label={transaction.paymentStatus}
-                        tone={transaction.paymentStatus === "Pago" ? "success" : "warning"}
-                      />
+                      <div className="flex flex-wrap items-center gap-1">
+                        {transaction.isProjected ? <StatusBadge label="Previsto" tone="info" /> : null}
+                        <StatusBadge
+                          label={transaction.paymentStatus}
+                          tone={transaction.paymentStatus === "Pago" ? "success" : "warning"}
+                        />
+                      </div>
                     </td>
                     <td className="hidden px-2 py-2 text-slate-700 lg:table-cell">{transaction.category}</td>
                     <td className="hidden px-2 py-2 lg:table-cell">
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleEdit(transaction)}
-                          className="rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 transition-all hover:bg-blue-100"
-                        >
-                          Editar
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleRemove(transaction.id)}
-                          className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition-all hover:bg-rose-100"
-                        >
-                          Remover
-                        </button>
-                      </div>
+                      {transaction.isProjected ? (
+                        <span className="text-xs text-slate-400">Somente leitura</span>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleEdit(transaction)}
+                            className="rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 transition-all hover:bg-blue-100"
+                          >
+                            Editar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleRemove(transaction.id)}
+                            className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition-all hover:bg-rose-100"
+                          >
+                            Remover
+                          </button>
+                        </div>
+                      )}
                     </td>
                     <td className="rounded-r-xl px-2 py-2 text-right text-sm font-bold text-slate-900 md:text-base">
                       {formatCurrency(transaction.value)}
@@ -839,6 +1019,13 @@ function Lancamentos() {
           </div>
         )}
       </section>
+
+      <AnnualSummaryModal
+        open={annualOpen}
+        onClose={() => setAnnualOpen(false)}
+        year={summaryYear}
+        transactions={rawTransactions}
+      />
     </div>
   )
 }

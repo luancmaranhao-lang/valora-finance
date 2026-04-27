@@ -1,6 +1,7 @@
 import { useMemo } from "react"
 import EmptyState from "./EmptyState"
 import SectionCard from "./SectionCard"
+import { removeLancamentoMetaTags } from "../utils/lancamentoDisplay"
 
 function formatCurrency(value) {
   return new Intl.NumberFormat("pt-BR", {
@@ -31,12 +32,9 @@ function FinanceInsightCard({ transactions = [] }) {
     }, null)
 
     const biggestValue = Number(biggestExpense?.valor ?? biggestExpense?.value ?? 0)
-    const biggestLabel =
-      biggestExpense?.descricao ??
-      biggestExpense?.description ??
-      biggestExpense?.categoria ??
-      biggestExpense?.category ??
-      "Despesa sem descricao"
+    const biggestLabel = removeLancamentoMetaTags(
+      biggestExpense?.descricao ?? biggestExpense?.description ?? biggestExpense?.categoria ?? biggestExpense?.category ?? "",
+    ).trim() || "Despesa sem descricao"
 
     return {
       totalExpenses,

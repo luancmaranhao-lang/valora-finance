@@ -7,6 +7,7 @@ import Cartoes from "./pages/Cartoes"
 import Configuracoes from "./pages/Configuracoes"
 import Grupos from "./pages/Grupos"
 import IAFinanceira from "./pages/IAFinanceira"
+import DividasMacro from "./pages/DividasMacro"
 import Lancamentos from "./pages/Lancamentos"
 import Login from "./pages/Login"
 import Metas from "./pages/Metas"
@@ -17,6 +18,7 @@ import { createCheckoutSession } from "./services/stripeService"
 const pageComponents = {
   Dashboard,
   Lançamentos: Lancamentos,
+  "Dívidas macro": DividasMacro,
   Cartões: Cartoes,
   Metas,
   Relatórios: Relatorios,
