@@ -1,4 +1,3 @@
-import { financialGoals } from "../data/mockFinanceData"
 import SectionCard from "./SectionCard"
 
 function formatCurrency(value) {
@@ -8,12 +7,28 @@ function formatCurrency(value) {
   }).format(value)
 }
 
-function GoalsPanel() {
+function GoalsPanel({ metas = [] }) {
+  const mappedGoals =
+    metas.length > 0
+      ? metas.map((meta) => ({
+          id: meta.id,
+          name: meta.nome ?? meta.name ?? "Meta",
+          currentValue: Number(meta.valor_atual ?? meta.currentValue ?? meta.current ?? 0),
+          targetValue: Number(meta.valor_alvo ?? meta.targetValue ?? meta.target ?? 0),
+        }))
+      : []
+
   return (
     <SectionCard title="Metas Financeiras" description="Acompanhe a evolucao das metas prioritarias.">
       <div className="space-y-4">
-        {financialGoals.map((goal) => {
-          const progress = Math.round((goal.currentValue / goal.targetValue) * 100)
+        {mappedGoals.length === 0 ? (
+          <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500">
+            Sem metas registradas para este usuario.
+          </p>
+        ) : null}
+        {mappedGoals.map((goal) => {
+          const target = goal.targetValue > 0 ? goal.targetValue : 1
+          const progress = Math.round((goal.currentValue / target) * 100)
 
           return (
             <article key={goal.id} className="rounded-xl border border-slate-200 p-4">

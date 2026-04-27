@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import CreditCardsPanel from "../components/CreditCardsPanel"
 import EmptyState from "../components/EmptyState"
 import FinanceInsightCard from "../components/FinanceInsightCard"
@@ -10,6 +10,7 @@ import RecentTransactions from "../components/RecentTransactions"
 import StatCard from "../components/StatCard"
 import { listarContas } from "../services/contasService"
 import { listarLancamentos } from "../services/lancamentosService"
+import { metasService } from "../services/metasService"
 
 function calculateVariation(current, previous) {
   if (previous === 0 && current > 0) return "+100%"
@@ -27,28 +28,45 @@ function formatCurrency(value) {
 function Dashboard() {
   const [transactions, setTransactions] = useState([])
   const [accounts, setAccounts] = useState([])
+  const [metas, setMetas] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState("")
 
+  const loadDashboardData = useCallback(async () => {
+    try {
+      setIsLoading(true)
+      setErrorMessage("")
+      const [transactionsData, accountsData, metasData] = await Promise.all([
+        listarLancamentos(),
+        listarContas(),
+        metasService.listarMetas(),
+      ])
+      setTransactions(transactionsData ?? [])
+      setAccounts(accountsData ?? [])
+      setMetas(metasData ?? [])
+    } catch {
+      setErrorMessage("Nao foi possivel carregar os indicadores financeiros agora.")
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     const timer = setTimeout(() => {
-      async function loadDashboardData() {
-        try {
-          setIsLoading(true)
-          setErrorMessage("")
-          const [transactionsData, accountsData] = await Promise.all([listarLancamentos(), listarContas()])
-          setTransactions(transactionsData ?? [])
-          setAccounts(accountsData ?? [])
-        } catch {
-          setErrorMessage("Nao foi possivel carregar os indicadores financeiros agora.")
-        } finally {
-          setIsLoading(false)
-        }
-      }
       void loadDashboardData()
     }, 0)
-    return () => clearTimeout(timer)
-  }, [])
+
+    function handleMetasUpdated() {
+      void loadDashboardData()
+    }
+
+    window.addEventListener("metas:updated", handleMetasUpdated)
+
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener("metas:updated", handleMetasUpdated)
+    }
+  }, [loadDashboardData])
 
   const dashboardData = useMemo(() => {
     const now = new Date()
@@ -264,7 +282,7 @@ function Dashboard() {
 
       <section className="grid gap-4 lg:grid-cols-2">
         <CreditCardsPanel />
-        <GoalsPanel />
+        <GoalsPanel metas={metas} />
       </section>
 
       <RecentTransactions />

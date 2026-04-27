@@ -1,13 +1,9 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import EmptyState from "../components/EmptyState"
 import PageHeader from "../components/PageHeader"
 import ProgressBar from "../components/ProgressBar"
 import StatusBadge from "../components/StatusBadge"
-
-const initialGoals = [
-  { id: "g1", name: "Reserva de emergencia", target: 30000, current: 14500, deadline: "2026-12-31" },
-  { id: "g2", name: "Viagem em familia", target: 9000, current: 6200, deadline: "2026-08-30" },
-]
+import { metasService } from "../services/metasService"
 
 const initialForm = {
   name: "",
@@ -21,47 +17,94 @@ function formatCurrency(value) {
 }
 
 function Metas() {
-  const [goals, setGoals] = useState(initialGoals)
+  const [goals, setGoals] = useState([])
   const [form, setForm] = useState(initialForm)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isSaving, setIsSaving] = useState(false)
+  const [message, setMessage] = useState("")
+
+  async function loadMetas() {
+    try {
+      setIsLoading(true)
+      const data = await metasService.listarMetas()
+      setGoals(data ?? [])
+    } catch (error) {
+      setMessage(error?.message || "Nao foi possivel carregar as metas.")
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void loadMetas()
+    }, 0)
+
+    return () => clearTimeout(timer)
+  }, [])
 
   function handleChange(event) {
     const { name, value } = event.target
     setForm((prev) => ({ ...prev, [name]: value }))
   }
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault()
     const target = Number(form.target)
     const current = Number(form.current)
     if (!form.name || !target || !form.deadline) return
 
-    setGoals((prev) => [
-      {
-        id: crypto.randomUUID(),
+    try {
+      setIsSaving(true)
+      setMessage("")
+
+      await metasService.salvarMeta({
         name: form.name.trim(),
         target,
         current: Number.isFinite(current) ? current : 0,
         deadline: form.deadline,
-      },
-      ...prev,
-    ])
-    setForm(initialForm)
+      })
+
+      setForm(initialForm)
+      setMessage("Meta salva com sucesso!")
+      await loadMetas()
+      window.dispatchEvent(new Event("metas:updated"))
+    } catch (error) {
+      setMessage(error?.message || "Nao foi possivel salvar a meta.")
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   const enrichedGoals = useMemo(() => {
     const today = new Date()
     return goals.map((goal) => {
-      const progress = Math.min(Math.round((goal.current / goal.target) * 100), 100)
+      const current = Number(goal.current ?? goal.valor_atual ?? goal.currentValue ?? 0)
+      const target = Number(goal.target ?? goal.valor_alvo ?? goal.targetValue ?? 0)
+      const deadline = goal.deadline ?? goal.prazo ?? ""
+      const progress = target > 0 ? Math.min(Math.round((current / target) * 100), 100) : 0
       const isConcluded = progress >= 100
-      const isLate = !isConcluded && new Date(goal.deadline) < today
+      const isLate = !isConcluded && deadline ? new Date(deadline) < today : false
       const status = isConcluded ? "Concluida" : isLate ? "Atrasada" : "Em andamento"
-      return { ...goal, progress, status }
+      return {
+        ...goal,
+        name: goal.name ?? goal.nome ?? "Meta",
+        current,
+        target,
+        deadline,
+        progress,
+        status,
+      }
     })
   }, [goals])
 
   return (
     <div className="space-y-6">
       <PageHeader title="Metas" subtitle="Planeje objetivos financeiros e acompanhe sua evolucao mensal." />
+
+      {message ? (
+        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm">{message}</div>
+      ) : null}
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="text-lg font-semibold text-slate-900">Nova meta</h2>
@@ -100,20 +143,26 @@ function Metas() {
           />
           <button
             type="submit"
+            disabled={isSaving}
             className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-slate-800 md:col-span-2 xl:col-span-4"
           >
-            Adicionar meta
+            {isSaving ? "Salvando..." : "Adicionar meta"}
           </button>
         </form>
       </section>
 
       <section className="grid gap-4 lg:grid-cols-2">
-        {enrichedGoals.length === 0 ? (
+        {isLoading ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">
+            Carregando metas...
+          </div>
+        ) : null}
+        {!isLoading && enrichedGoals.length === 0 ? (
           <EmptyState
             title="Nenhuma meta cadastrada"
             description="Adicione uma meta para acompanhar seu progresso financeiro."
           />
-        ) : (
+        ) : !isLoading ? (
           enrichedGoals.map((goal) => (
           <article key={goal.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-3 flex items-start justify-between gap-2">
@@ -143,7 +192,7 @@ function Metas() {
             </div>
           </article>
           ))
-        )}
+        ) : null}
       </section>
     </div>
   )
