@@ -17,6 +17,7 @@ const categoryOptions = [
   "💼 Trabalho",
   "⚖️ Jurídico",
   "🏠 Casa",
+  "🔄 Assinaturas",
   "🛒 Mercado",
   "🚗 Transporte",
   "🍔 Alimentação",

@@ -11,7 +11,7 @@ import StatCard from "../components/StatCard"
 import { listarLancamentos } from "../services/lancamentosService"
 import { metasService } from "../services/metasService"
 
-const subscriptionTag = "[ASSINATURA]"
+const subscriptionCategory = "🔄 Assinaturas"
 
 function calculateVariation(current, previous) {
   if (previous === 0 && current > 0) return "+100%"
@@ -101,12 +101,6 @@ function Dashboard() {
       ].join("|")
     }
 
-    function isMarkedAsSubscription(item) {
-      if (Boolean(item.assinatura ?? item.eh_assinatura)) return true
-      const description = String(item.descricao ?? item.description ?? "")
-      return description.includes(subscriptionTag)
-    }
-
     function projectedRecurringForMonth(allItems, year, month) {
       const recurringTypes = new Set(["recorrente_fixa", "recorrente_variavel"])
       const recurringExpenses = allItems.filter((item) => {
@@ -188,11 +182,12 @@ function Dashboard() {
     const monthlySubscriptions = currentMonthTransactions
       .filter((item) => {
         const recurrence = (item.recorrencia ?? "unica").toString().toLowerCase()
-        return recurrence === "recorrente_fixa" && isMarkedAsSubscription(item)
+        const category = (item.categoria ?? item.category ?? "").toString().trim()
+        return recurrence === "recorrente_fixa" && category === subscriptionCategory
       })
       .map((item) => ({
         id: item.id,
-        name: String(item.descricao ?? item.description ?? "Assinatura").replace(` ${subscriptionTag}`, "").trim(),
+        name: String(item.descricao ?? item.description ?? "Assinatura").replace(" [ASSINATURA]", "").trim(),
         value: Number(item.valor ?? item.value ?? 0),
       }))
 
@@ -307,15 +302,12 @@ function Dashboard() {
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-4 flex items-center justify-between gap-3">
-          <h3 className="text-base font-semibold text-slate-900">Minhas Assinaturas</h3>
-          <p className="text-xs font-semibold text-slate-600">
-            Total no mês: {formatCurrency(dashboardData.monthlySubscriptionsTotal)}
-          </p>
+          <h3 className="text-base font-semibold text-slate-900">Resumo de Assinaturas</h3>
         </div>
         {dashboardData.monthlySubscriptions.length === 0 ? (
           <EmptyState
             title="Nenhuma assinatura marcada"
-            description="Marque lançamentos recorrentes fixos como assinatura para monitorar este total."
+            description="Use a categoria 🔄 Assinaturas em lançamentos recorrentes fixos para preencher este resumo."
           />
         ) : (
           <div className="space-y-2">
@@ -328,6 +320,9 @@ function Dashboard() {
                 <p className="text-sm font-semibold text-slate-900">{formatCurrency(subscription.value)}</p>
               </article>
             ))}
+            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-semibold text-slate-800">
+              Custo Mensal de Assinaturas: {formatCurrency(dashboardData.monthlySubscriptionsTotal)}
+            </div>
           </div>
         )}
       </section>
