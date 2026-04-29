@@ -14,6 +14,14 @@ const menuItems = [
   "Configurações",
 ]
 
+const mobileNavItems = [
+  { label: "Despesas", page: "Lançamentos de Despesas" },
+  { label: "Receitas", page: "Lançamentos de Receitas" },
+  { label: "Dívidas", page: "Dívidas Pendentes" },
+  { label: "Cartões", page: "Cartões" },
+  { label: "Relatórios", page: "Relatórios" },
+]
+
 function MainLayout({ children, onSignOut }) {
   const [activePage, setActivePage] = useState("Lançamentos de Despesas")
 
@@ -30,23 +38,23 @@ function MainLayout({ children, onSignOut }) {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#f7f4eb] to-[#efeadc] text-[#17130b]">
-      <header className="sticky top-0 z-10 border-b border-[#d8c08a]/40 bg-[#f6f1e4]/85 px-4 py-3 shadow-sm backdrop-blur md:hidden">
+      <header className="sticky top-0 z-30 border-b border-[#d8c08a]/40 bg-[#f6f1e4]/90 px-3 py-2 shadow-sm backdrop-blur md:hidden">
         <div className="flex items-center justify-between">
           <img
             src="/logo-valora-gold.png.png"
             alt="Valora Finance"
-            className="logo-valora h-20 w-auto object-contain"
-            style={{ maxHeight: "70px" }}
+            className="logo-valora h-10 w-auto max-w-[62vw] object-contain"
+            style={{ maxHeight: "40px", transform: "scale(1.1)", transformOrigin: "left center" }}
           />
-          <div className="flex items-center gap-2">
-            <span className="rounded-full border border-[#cfb16b]/70 bg-[#f4ead0] px-2.5 py-1 text-xs font-semibold text-[#6a5318]">
+          <div className="flex shrink-0 items-center gap-1.5">
+            <span className="rounded-full border border-[#cfb16b]/70 bg-[#f4ead0] px-2 py-0.5 text-[10px] font-semibold text-[#6a5318]">
               Finance
             </span>
             {onSignOut ? (
               <button
                 type="button"
                 onClick={onSignOut}
-                className="valora-gold-menu rounded-lg px-2.5 py-1 text-xs font-semibold"
+                className="valora-gold-menu rounded-md px-2 py-0.5 text-[11px] font-semibold"
               >
                 Sair
               </button>
@@ -55,7 +63,7 @@ function MainLayout({ children, onSignOut }) {
         </div>
       </header>
 
-      <div className="mx-auto flex w-full max-w-[1440px] gap-6 px-4 py-4 md:px-6 md:py-6">
+      <div className="mx-auto flex w-full max-w-[1440px] gap-6 px-3 py-3 pb-24 md:px-6 md:py-6 md:pb-6">
         <aside className="hidden w-64 shrink-0 rounded-2xl border border-[#d8c08a]/55 bg-[#f4efdf]/85 p-4 shadow-sm md:block">
           <div className="mb-6 border-b border-[#d8c08a]/35 pb-4 text-center">
             <img
@@ -101,6 +109,26 @@ function MainLayout({ children, onSignOut }) {
           {typeof children === "function" ? children({ activePage }) : children}
         </main>
       </div>
+
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-[#d8c08a]/60 bg-[#f6f0df]/95 px-2 pb-[max(env(safe-area-inset-bottom),0.35rem)] pt-2 shadow-[0_-8px_24px_rgba(74,53,12,0.12)] backdrop-blur md:hidden">
+        <div className="mx-auto grid max-w-xl grid-cols-5 gap-1">
+          {mobileNavItems.map((item) => {
+            const isActive = activePage === item.page
+            return (
+              <button
+                key={item.page}
+                type="button"
+                onClick={() => setActivePage(item.page)}
+                className={`min-h-12 rounded-xl px-1 py-1.5 text-center text-[11px] font-semibold leading-tight transition-transform duration-100 active:scale-[0.95] ${
+                  isActive ? "valora-gold-menu-active" : "valora-gold-menu"
+                }`}
+              >
+                {item.label}
+              </button>
+            )
+          })}
+        </div>
+      </nav>
     </div>
   )
 }

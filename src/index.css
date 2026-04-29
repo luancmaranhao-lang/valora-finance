@@ -19,6 +19,13 @@
     font-optical-sizing: auto;
     -webkit-font-smoothing: antialiased;
   }
+
+  html,
+  body,
+  #root {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
 }
 
 .valora-num {

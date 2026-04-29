@@ -836,7 +836,7 @@ function Lancamentos() {
   }, [showFormSection, editingId])
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6">
       {message ? (
         <div
           className={`rounded-2xl border px-4 py-3 text-sm shadow-sm ${
@@ -849,13 +849,13 @@ function Lancamentos() {
         </div>
       ) : null}
 
-      <section className="rounded-2xl border border-dashed border-slate-300 bg-white p-5 shadow-sm">
+      <section className="rounded-2xl border border-dashed border-slate-300 bg-white p-4 shadow-sm md:p-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">
               {editingId ? "Editar lançamento de despesas" : "Novo lançamento de despesas"}
             </h2>
-            <p className="mt-1 text-xs text-slate-500">
+            <p className="mt-1 text-[11px] leading-relaxed text-slate-500 md:text-xs">
               {editingId
                 ? "Ajuste os campos e salve. Ou cancele para voltar à lista."
                 : "Formulário opcional — a lista abaixo é o foco principal desta tela."}
@@ -865,7 +865,7 @@ function Lancamentos() {
             <button
               type="button"
               onClick={() => setFormExpanded((open) => !open)}
-              className="valora-gold-button min-h-11 shrink-0 rounded-xl px-4 py-2.5 text-sm font-semibold"
+              className="valora-gold-button min-h-11 w-full rounded-xl px-4 py-2.5 text-sm font-semibold sm:w-auto sm:shrink-0"
             >
               {formExpanded ? "Recolher formulário" : "Abrir formulário"}
             </button>
@@ -873,7 +873,7 @@ function Lancamentos() {
         </div>
 
         {!showFormSection && !editingId ? (
-          <p className="mt-4 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          <p className="mt-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5 text-xs leading-relaxed text-slate-600 md:mt-4 md:px-4 md:py-3 md:text-sm">
             Toque em <strong>Abrir formulário</strong> quando quiser registrar ou planejar um lançamento.
           </p>
         ) : null}
@@ -1161,7 +1161,7 @@ function Lancamentos() {
       </section>
 
       <section className="relative overflow-hidden rounded-2xl border border-[#d8c08a]/45 bg-[#f8f2e3]/80 shadow-sm">
-        <div className="border-b border-[#d8c08a]/35 bg-[#fbf6ea]/85 px-4 py-3 sm:px-5">
+        <div className="border-b border-[#d8c08a]/35 bg-[#fbf6ea]/85 px-3 py-3 sm:px-5">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <h2 className="text-base font-bold tracking-tight text-slate-900 sm:text-lg">Lançamentos</h2>
@@ -1193,20 +1193,20 @@ function Lancamentos() {
             </div>
           </div>
 
-          <div className="mt-3 grid gap-2.5 sm:grid-cols-3">
-            <div className="valora-metal-card rounded-2xl px-2.5 py-2">
+          <div className="mt-3 grid gap-2.5 md:grid-cols-3">
+            <div className="valora-metal-card w-full rounded-2xl px-2.5 py-2">
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7a5b16]">Total gastos</p>
-              <p className="valora-num mt-1 text-2xl font-semibold text-[#2e220b]">{formatCurrency(footerTotals.gastosGeral)}</p>
+              <p className="valora-num mt-1 text-xl font-semibold text-[#2e220b] md:text-2xl">{formatCurrency(footerTotals.gastosGeral)}</p>
             </div>
 
-            <div className="valora-metal-card rounded-2xl px-2.5 py-2">
+            <div className="valora-metal-card w-full rounded-2xl px-2.5 py-2">
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7a5b16]">Pagas</p>
-              <p className="valora-num mt-1 text-2xl font-semibold text-emerald-700">{formatCurrency(footerTotals.despesasPagas)}</p>
+              <p className="valora-num mt-1 text-xl font-semibold text-emerald-700 md:text-2xl">{formatCurrency(footerTotals.despesasPagas)}</p>
             </div>
 
-            <div className="valora-metal-card rounded-2xl px-2.5 py-2">
+            <div className="valora-metal-card w-full rounded-2xl px-2.5 py-2">
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7a5b16]">Pendentes</p>
-              <p className="valora-num mt-1 text-2xl font-semibold text-amber-800">{formatCurrency(footerTotals.despesasPendentes)}</p>
+              <p className="valora-num mt-1 text-xl font-semibold text-amber-800 md:text-2xl">{formatCurrency(footerTotals.despesasPendentes)}</p>
             </div>
           </div>
 
@@ -1233,15 +1233,15 @@ function Lancamentos() {
 
         </div>
 
-        <div className="flex justify-center px-4 pb-3 pt-4">
+        <div className="flex justify-center px-2 pb-3 pt-4 sm:px-4">
           <div className="inline-flex items-center gap-1 rounded-full border border-[#d8c08a]/45 bg-white/90 p-1 shadow-sm">
             <button
               type="button"
               aria-label="Mês anterior"
               onClick={() => shiftViewMonth(-1)}
-              className="valora-gold-menu flex min-h-11 min-w-11 items-center justify-center rounded-full text-slate-700 transition active:scale-[0.96]"
+              className="valora-gold-menu flex min-h-9 min-w-9 items-center justify-center rounded-full text-slate-700 transition active:scale-[0.96] sm:min-h-11 sm:min-w-11"
             >
-              <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden>
+              <svg className="h-4 w-4 sm:h-5 sm:w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden>
                 <path
                   fillRule="evenodd"
                   d="M12.79 5.23a.75.75 0 0 1 .02 1.06L8.832 10l3.938 3.71a.75.75 0 1 1-1.04 1.08l-4.5-4.25a.75.75 0 0 1 0-1.08l4.5-4.25a.75.75 0 0 1 1.06.02Z"
@@ -1249,16 +1249,16 @@ function Lancamentos() {
                 />
               </svg>
             </button>
-            <span className="min-w-[11rem] select-none px-3 text-center text-sm font-bold capitalize tracking-tight text-slate-900 sm:min-w-[13rem] sm:text-base">
+            <span className="min-w-[9.5rem] select-none px-2 text-center text-sm font-bold capitalize tracking-tight text-slate-900 sm:min-w-[13rem] sm:px-3 sm:text-base">
               {monthTitle}
             </span>
             <button
               type="button"
               aria-label="Próximo mês"
               onClick={() => shiftViewMonth(1)}
-              className="valora-gold-menu flex min-h-11 min-w-11 items-center justify-center rounded-full text-slate-700 transition active:scale-[0.96]"
+              className="valora-gold-menu flex min-h-9 min-w-9 items-center justify-center rounded-full text-slate-700 transition active:scale-[0.96] sm:min-h-11 sm:min-w-11"
             >
-              <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden>
+              <svg className="h-4 w-4 sm:h-5 sm:w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden>
                 <path
                   fillRule="evenodd"
                   d="M7.21 14.77a.75.75 0 0 1-.02-1.06L11.168 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06.02Z"
@@ -1289,8 +1289,73 @@ function Lancamentos() {
             <EmptyState title="Carregando lançamentos" description="Buscando movimentações mais recentes..." />
           </div>
         ) : (
-          <div className="overflow-x-auto px-2 pb-5 sm:px-4">
-            <table className="w-full border-collapse text-sm">
+          <div className="px-2 pb-5 sm:px-4">
+            <div className="space-y-2.5 md:hidden">
+              {filteredTransactions.map((transaction) => {
+                const signal = resolvePaymentSignal(transaction)
+                const statusClasses =
+                  signal.tone === "paid"
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : signal.tone === "pending"
+                      ? "border-rose-200 bg-rose-50 text-rose-700"
+                      : "border-sky-200 bg-sky-50 text-sky-700"
+                return (
+                  <article
+                    key={transaction.id}
+                    className="w-full rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition-transform duration-100 active:scale-[0.95]"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="min-w-0 truncate text-sm font-semibold text-slate-900">{transaction.description}</p>
+                      <p className="valora-num shrink-0 text-sm font-bold text-slate-950">{formatCurrency(transaction.value)}</p>
+                    </div>
+                    <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[11px] text-slate-600">
+                      <p><span className="font-semibold text-slate-700">Data:</span> {transaction.date}</p>
+                      <p><span className="font-semibold text-slate-700">Categoria:</span> {transaction.category}</p>
+                      <p><span className="font-semibold text-slate-700">Recorrência:</span> {transaction.recurrenceType}</p>
+                      <p>
+                        <span className="font-semibold text-slate-700">Status:</span>{" "}
+                        <span className={`inline-flex rounded-md border px-1.5 py-0.5 text-[10px] font-semibold ${statusClasses}`}>
+                          {signal.label}
+                        </span>
+                      </p>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      {!transaction.isProjected ? (
+                        <button
+                          type="button"
+                          onClick={() => void handleTogglePaymentStatus(transaction)}
+                          className="valora-gold-menu rounded-lg px-2 py-1 text-[10px] font-semibold"
+                        >
+                          Alternar status
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-slate-400">Somente leitura</span>
+                      )}
+                      {!transaction.isProjected ? (
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleEdit(transaction)}
+                            className="rounded-md border border-blue-200/90 bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-700"
+                          >
+                            Editar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleRemove(transaction.id)}
+                            className="rounded-md border border-rose-200/90 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700"
+                          >
+                            Remover
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+
+            <table className="hidden w-full border-collapse text-sm md:table">
               <thead>
                 <tr className="text-left text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">
                   <th className="rounded-tl-xl bg-slate-100/95 px-3 py-2.5 font-semibold">Data</th>
