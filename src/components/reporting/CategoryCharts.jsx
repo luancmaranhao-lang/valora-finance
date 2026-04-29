@@ -39,6 +39,7 @@ export function CategoryPieChart({ entries, onSliceClick, size = 200 }) {
   const total = entries.reduce((s, e) => s + e.value, 0) || 1
 
   const [tip, setTip] = useState(null)
+  const [selectedSlice, setSelectedSlice] = useState(null)
 
   const showTip = useCallback((e, name, value) => {
     setTip({
@@ -61,8 +62,11 @@ export function CategoryPieChart({ entries, onSliceClick, size = 200 }) {
     acc += e.value
     const end = (acc / total) * 360
     const d = sectorPath(cx, cy, r, start, end)
-    return { d, name: e.name, value: e.value, color: COLORS[i % COLORS.length], key: e.name }
+    const pct = (e.value / total) * 100
+    return { d, name: e.name, value: e.value, pct, color: COLORS[i % COLORS.length], key: e.name, start, end }
   })
+
+  const selectedData = selectedSlice ? sectors.find((item) => item.name === selectedSlice) : null
 
   if (entries.length === 1 && entries[0]) {
     const e0 = entries[0]
@@ -94,8 +98,10 @@ export function CategoryPieChart({ entries, onSliceClick, size = 200 }) {
             cy={cy}
             r={r}
             fill={COLORS[0]}
-            className="cursor-pointer transition-[filter] hover:brightness-110"
-            onClick={() => onSliceClick?.(e0.name)}
+            className={`cursor-pointer transition-all hover:brightness-110 ${
+              selectedSlice === e0.name ? "brightness-110" : ""
+            }`}
+            onClick={() => setSelectedSlice(e0.name)}
             onMouseEnter={(ev) => showTip(ev, e0.name, e0.value)}
             onMouseMove={moveTip}
             tabIndex={0}
@@ -104,7 +110,24 @@ export function CategoryPieChart({ entries, onSliceClick, size = 200 }) {
             }}
           />
         </svg>
-        <p className="text-center text-xs text-slate-500">Passe o mouse ou toque no círculo para ver o valor</p>
+        {selectedSlice === e0.name ? (
+          <div className="w-full max-w-xs rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+            <p className="font-semibold text-slate-900">{e0.name}</p>
+            <p className="valora-num mt-1 text-base font-bold text-slate-900">{formatBrl(e0.value)}</p>
+            <p className="text-xs text-slate-500">100% das despesas do período.</p>
+            {onSliceClick ? (
+              <button
+                type="button"
+                onClick={() => onSliceClick(e0.name)}
+                className="valora-gold-menu mt-2 rounded-lg px-2.5 py-1 text-xs font-semibold"
+              >
+                Ver lançamentos da categoria
+              </button>
+            ) : null}
+          </div>
+        ) : (
+          <p className="text-center text-xs text-slate-500">Passe o mouse ou toque no círculo para ver o valor</p>
+        )}
       </div>
     )
   }
@@ -129,27 +152,50 @@ export function CategoryPieChart({ entries, onSliceClick, size = 200 }) {
         aria-label="Gastos por categoria"
         onMouseMove={moveTip}
       >
-        {sectors.map((s) => (
-          <path
-            key={s.key}
-            d={s.d}
-            fill={s.color}
-            className="cursor-pointer stroke-white transition-[filter] hover:brightness-110"
-            strokeWidth="1"
-            onClick={() => onSliceClick?.(s.name)}
-            onMouseEnter={(ev) => showTip(ev, s.name, s.value)}
-            onMouseMove={moveTip}
-            onKeyDown={(ev) => {
-              if (ev.key === "Enter" || ev.key === " ") {
-                ev.preventDefault()
-                onSliceClick?.(s.name)
-              }
-            }}
-            tabIndex={0}
-          />
-        ))}
+        {sectors.map((s) => {
+          const isSelected = selectedSlice === s.name
+          const mid = (s.start + s.end) / 2
+          const [tx, ty] = polar(0, 0, isSelected ? 8 : 0, mid)
+          return (
+            <path
+              key={s.key}
+              d={s.d}
+              fill={s.color}
+              transform={`translate(${tx}, ${ty})`}
+              className={`cursor-pointer stroke-white transition-all hover:brightness-110 ${isSelected ? "brightness-110" : ""}`}
+              strokeWidth={isSelected ? "2" : "1"}
+              onClick={() => setSelectedSlice(s.name)}
+              onMouseEnter={(ev) => showTip(ev, s.name, s.value)}
+              onMouseMove={moveTip}
+              onKeyDown={(ev) => {
+                if (ev.key === "Enter" || ev.key === " ") {
+                  ev.preventDefault()
+                  setSelectedSlice(s.name)
+                }
+              }}
+              tabIndex={0}
+            />
+          )
+        })}
       </svg>
-      <p className="text-center text-xs text-slate-500">Passe o mouse na fatia para ver categoria e valor</p>
+      {selectedData ? (
+        <div className="w-full max-w-xs rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+          <p className="font-semibold text-slate-900">{selectedData.name}</p>
+          <p className="valora-num mt-1 text-base font-bold text-slate-900">{formatBrl(selectedData.value)}</p>
+          <p className="text-xs text-slate-500">{selectedData.pct.toFixed(1)}% das despesas do período.</p>
+          {onSliceClick ? (
+            <button
+              type="button"
+              onClick={() => onSliceClick(selectedData.name)}
+              className="valora-gold-menu mt-2 rounded-lg px-2.5 py-1 text-xs font-semibold"
+            >
+              Ver lançamentos da categoria
+            </button>
+          ) : null}
+        </div>
+      ) : (
+        <p className="text-center text-xs text-slate-500">Passe o mouse na fatia ou toque para selecionar</p>
+      )}
     </div>
   )
 }

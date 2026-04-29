@@ -1,9 +1,5 @@
-import { useMemo, useState } from "react"
-
-const initialWallets = [
-  { id: 1, nome: "Nubank", saldo: 1500.0 },
-  { id: 2, nome: "Dinheiro na Mão", saldo: 250.0 },
-]
+import { useEffect, useMemo, useState } from "react"
+import { listWallets, saveWallets, WALLETS_UPDATED_EVENT } from "../services/walletsService"
 const goldBorder = "#D4AF37"
 
 const BANK_STYLES = [
@@ -49,7 +45,7 @@ function formatSaldoForInput(value) {
 }
 
 function Carteiras() {
-  const [wallets, setWallets] = useState(initialWallets)
+  const [wallets, setWallets] = useState(() => listWallets())
   const [modalOpen, setModalOpen] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [form, setForm] = useState({ nome: "", saldo: "" })
@@ -58,6 +54,18 @@ function Carteiras() {
     () => wallets.reduce((sum, wallet) => sum + Number(wallet.saldo ?? 0), 0),
     [wallets],
   )
+
+  useEffect(() => {
+    function syncWallets() {
+      setWallets(listWallets())
+    }
+    window.addEventListener(WALLETS_UPDATED_EVENT, syncWallets)
+    window.addEventListener("storage", syncWallets)
+    return () => {
+      window.removeEventListener(WALLETS_UPDATED_EVENT, syncWallets)
+      window.removeEventListener("storage", syncWallets)
+    }
+  }, [])
 
   function openNewWallet() {
     setEditingId(null)
@@ -86,11 +94,12 @@ function Carteiras() {
     const saldo = parseMoneyInput(form.saldo)
     if (!nome) return
 
-    if (editingId != null) {
-      setWallets((prev) => prev.map((w) => (w.id === editingId ? { ...w, nome, saldo } : w)))
-    } else {
-      setWallets((prev) => [{ id: Date.now(), nome, saldo }, ...prev])
-    }
+    const nextWallets =
+      editingId != null
+        ? wallets.map((w) => (w.id === editingId ? { ...w, nome, saldo } : w))
+        : [{ id: Date.now(), nome, saldo }, ...wallets]
+    setWallets(nextWallets)
+    saveWallets(nextWallets)
     closeModal()
   }
 

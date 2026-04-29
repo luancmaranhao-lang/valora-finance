@@ -36,15 +36,108 @@ function FinanceMentorChat({ monthlySnapshot, analysisScope, mentorContext }) {
     const resumoLancamentos = todosLancamentos
       .map((l) => `${l.descricao}: R$ ${Number(l.valor ?? 0).toFixed(2)} [${l.tipo}/${l.status}]`)
       .join(" | ")
+    const wallets = mentorContext?.wallets ?? []
+    const totalWalletBalance = Number(mentorContext?.totalWalletBalance ?? 0)
+    const resumoWallets = wallets
+      .map((w) => `${w.nome}: R$ ${Number(w.saldo ?? 0).toFixed(2)}`)
+      .join(" | ")
+    const despesasPagasMes = Number(mentorContext?.expensesPaidMonth ?? 0)
+    const despesasPendentesMes = Number(mentorContext?.expensesPendingMonth ?? 0)
+    const receitasMes = Number(mentorContext?.receitasMes ?? receitaTotal)
+    const saldoPrevistoMes = Number(mentorContext?.saldoPrevistoMes ?? saldoPrevisto)
     const futureContext = JSON.stringify(analysisScope?.futureByMonth ?? [], null, 0)
     return `Você é o Mentor Financeiro premium do app Valora. Seu tom é direto, profissional e focado em soluções.
 Mês atual de análise: ${mesAtualNome}.
 RESUMO: Receitas: R$ ${receitaTotal.toFixed(2)}, Despesas Totais: R$ ${despesasTotais.toFixed(2)}, Despesas Pagas: R$ ${despesasRealizadas.toFixed(2)}, Despesas Pendentes: R$ ${despesasPendentes.toFixed(2)}, Saldo Previsto: R$ ${saldoPrevisto.toFixed(2)}.
+CARTEIRAS: Total disponível em carteiras: R$ ${totalWalletBalance.toFixed(2)}. Lista de carteiras: ${resumoWallets || "Sem carteiras cadastradas."}
+MÉTRICAS OPERACIONAIS: despesas pagas no mês R$ ${despesasPagasMes.toFixed(2)}; despesas pendentes no mês R$ ${despesasPendentesMes.toFixed(2)}; receitas do mês R$ ${receitasMes.toFixed(2)}; saldo previsto do mês R$ ${saldoPrevistoMes.toFixed(2)}.
 ALERTA DE CONTAS VENCIDAS/PENDENTES: ${resumoVencidas || "Nenhuma conta atrasada."}
 TODOS OS LANÇAMENTOS DO MÊS: ${resumoLancamentos || "Sem lançamentos no mês."}
 TENDÊNCIA MESES SUBSEQUENTES: ${futureContext}
 
-Sua missão: Analise os lançamentos para identificar onde o usuário está gastando mais, alerte com urgência sobre contas vencidas, sugira cortes se o saldo estiver negativo e ajude a estruturar um planejamento para o mês subsequente. Responda formatado em parágrafos curtos ou bullet points para fácil leitura.`
+Sua missão: Analise os lançamentos para identificar onde o usuário está gastando mais, alerte com urgência sobre contas vencidas, sugira cortes se o saldo estiver negativo e ajude a estruturar um planejamento para o mês subsequente.
+Quando o usuário perguntar sobre prioridades de pagamento com dinheiro em carteira, use obrigatoriamente o total disponível em carteiras e a lista de carteiras acima para recomendar uma ordem prática, priorizando contas vencidas e próximas do vencimento sem ultrapassar o saldo disponível.
+Responda em português, com seções curtas e objetivas, usando markdown simples (títulos curtos, listas e negrito quando fizer sentido).`
+  }
+
+  function renderSimpleMarkdown(text) {
+    const lines = String(text ?? "").split("\n")
+    const blocks = []
+    let listItems = []
+    let paragraph = []
+
+    function flushList() {
+      if (listItems.length === 0) return
+      blocks.push({ type: "list", items: listItems })
+      listItems = []
+    }
+    function flushParagraph() {
+      if (paragraph.length === 0) return
+      blocks.push({ type: "paragraph", text: paragraph.join("\n") })
+      paragraph = []
+    }
+
+    for (const raw of lines) {
+      const line = raw.trimEnd()
+      if (!line.trim()) {
+        flushList()
+        flushParagraph()
+        continue
+      }
+      if (line.startsWith("### ")) {
+        flushList()
+        flushParagraph()
+        blocks.push({ type: "h3", text: line.replace(/^###\s+/, "") })
+        continue
+      }
+      if (line.startsWith("- ")) {
+        flushParagraph()
+        listItems.push(line.replace(/^-+\s*/, ""))
+        continue
+      }
+      flushList()
+      paragraph.push(line)
+    }
+    flushList()
+    flushParagraph()
+
+    function renderInlineBold(value) {
+      const parts = String(value).split(/(\*\*[^*]+\*\*)/g)
+      return parts.map((part, idx) => {
+        if (/^\*\*[^*]+\*\*$/.test(part)) {
+          return <strong key={idx}>{part.slice(2, -2)}</strong>
+        }
+        return <span key={idx}>{part}</span>
+      })
+    }
+
+    return (
+      <div className="space-y-2.5 whitespace-pre-wrap break-words">
+        {blocks.map((block, idx) => {
+          if (block.type === "h3") {
+            return (
+              <h3 key={idx} className="text-sm font-semibold text-slate-900">
+                {renderInlineBold(block.text)}
+              </h3>
+            )
+          }
+          if (block.type === "list") {
+            return (
+              <ul key={idx} className="list-disc space-y-1 pl-4">
+                {block.items.map((item, itemIdx) => (
+                  <li key={`${idx}-${itemIdx}`}>{renderInlineBold(item)}</li>
+                ))}
+              </ul>
+            )
+          }
+          return (
+            <p key={idx} className="leading-relaxed">
+              {renderInlineBold(block.text)}
+            </p>
+          )
+        })}
+      </div>
+    )
   }
 
   async function send() {
@@ -103,7 +196,7 @@ Sua missão: Analise os lançamentos para identificar onde o usuário está gast
         {messages.map((msg, i) => (
           <div
             key={i}
-            className={`rounded-xl px-3 py-2 text-sm leading-relaxed ${
+            className={`max-w-[92%] rounded-xl px-3 py-2 text-sm leading-relaxed ${
               msg.role === "user"
                 ? "ml-4 border border-slate-200 bg-white text-slate-900"
                 : msg.kind === "error"
@@ -111,7 +204,7 @@ Sua missão: Analise os lançamentos para identificar onde o usuário está gast
                   : "mr-4 border border-slate-100 bg-white text-slate-800 shadow-sm"
             }`}
           >
-            {msg.text}
+            {msg.role === "assistant" && msg.kind !== "error" ? renderSimpleMarkdown(msg.text) : msg.text}
           </div>
         ))}
         {loading ? <p className="text-sm text-slate-500">Pensando...</p> : null}

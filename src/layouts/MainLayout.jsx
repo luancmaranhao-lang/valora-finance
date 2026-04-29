@@ -19,11 +19,20 @@ const mobileNavItems = [
   { label: "Receitas", page: "Lançamentos de Receitas" },
   { label: "Dívidas", page: "Dívidas Pendentes" },
   { label: "Cartões", page: "Cartões" },
+]
+
+const mobileMoreItems = [
   { label: "Relatórios", page: "Relatórios" },
+  { label: "Metas", page: "Metas" },
+  { label: "IA Financeira", page: "IA Financeira" },
+  { label: "Grupos", page: "Grupos" },
+  { label: "Configurações", page: "Configurações" },
+  { label: "Carteiras", page: "Carteiras" },
 ]
 
 function MainLayout({ children, onSignOut }) {
   const [activePage, setActivePage] = useState("Lançamentos de Despesas")
+  const [moreOpen, setMoreOpen] = useState(false)
 
   useEffect(() => {
     function onGoPage(event) {
@@ -35,6 +44,17 @@ function MainLayout({ children, onSignOut }) {
     window.addEventListener(GOTO_PAGE_EVENT, onGoPage)
     return () => window.removeEventListener(GOTO_PAGE_EVENT, onGoPage)
   }, [])
+
+  useEffect(() => {
+    if (!moreOpen) return
+    function onKeyDown(event) {
+      if (event.key === "Escape") setMoreOpen(false)
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [moreOpen])
+
+  const isMoreActive = mobileMoreItems.some((item) => item.page === activePage)
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#f7f4eb] to-[#efeadc] text-[#17130b]">
@@ -127,8 +147,66 @@ function MainLayout({ children, onSignOut }) {
               </button>
             )
           })}
+          <button
+            type="button"
+            onClick={() => setMoreOpen(true)}
+            className={`min-h-12 rounded-xl px-1 py-1.5 text-center text-[11px] font-semibold leading-tight transition-transform duration-100 active:scale-[0.95] ${
+              isMoreActive || moreOpen ? "valora-gold-menu-active" : "valora-gold-menu"
+            }`}
+          >
+            Mais
+          </button>
         </div>
       </nav>
+
+      {moreOpen ? (
+        <>
+          <button
+            type="button"
+            aria-label="Fechar menu adicional"
+            onClick={() => setMoreOpen(false)}
+            className="fixed inset-0 z-50 border-0 bg-slate-950/40 md:hidden"
+          />
+          <aside
+            className="fixed inset-x-0 bottom-0 z-[60] rounded-t-3xl border-t border-[#d8c08a]/55 bg-[#f8f3e6] px-4 pb-[max(env(safe-area-inset-bottom),1rem)] pt-3 shadow-[0_-14px_34px_rgba(35,25,8,0.25)] md:hidden"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Mais páginas"
+          >
+            <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-slate-300/80" />
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-900">Mais páginas</h3>
+              <button
+                type="button"
+                onClick={() => setMoreOpen(false)}
+                className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700"
+              >
+                Fechar
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {mobileMoreItems.map((item) => {
+                const isActive = activePage === item.page
+                return (
+                  <button
+                    key={item.page}
+                    type="button"
+                    onClick={() => {
+                      setActivePage(item.page)
+                      setMoreOpen(false)
+                    }}
+                    className={`min-h-11 rounded-xl px-3 py-2 text-left text-xs font-semibold transition-transform duration-100 active:scale-[0.95] ${
+                      isActive ? "valora-gold-menu-active" : "valora-gold-menu"
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                )
+              })}
+            </div>
+          </aside>
+        </>
+      ) : null}
     </div>
   )
 }

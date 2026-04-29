@@ -3,6 +3,7 @@ import EmptyState from "../components/EmptyState"
 import FinanceMentorChat from "../components/FinanceMentorChat"
 import PageHeader from "../components/PageHeader"
 import { listarLancamentos } from "../services/lancamentosService"
+import { getWalletsSummary, WALLETS_UPDATED_EVENT } from "../services/walletsService"
 
 function formatCurrency(value) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value)
@@ -21,6 +22,7 @@ function parseDateOnly(value) {
 
 function IAFinanceira() {
   const [transactions, setTransactions] = useState([])
+  const [walletSummary, setWalletSummary] = useState(() => getWalletsSummary())
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState("")
 
@@ -50,6 +52,18 @@ function IAFinanceira() {
     return () => {
       clearTimeout(timer)
       window.removeEventListener("lancamentos:updated", onLancamentosUpdated)
+    }
+  }, [])
+
+  useEffect(() => {
+    function syncWallets() {
+      setWalletSummary(getWalletsSummary())
+    }
+    window.addEventListener(WALLETS_UPDATED_EVENT, syncWallets)
+    window.addEventListener("storage", syncWallets)
+    return () => {
+      window.removeEventListener(WALLETS_UPDATED_EVENT, syncWallets)
+      window.removeEventListener("storage", syncWallets)
     }
   }, [])
 
@@ -184,6 +198,15 @@ function IAFinanceira() {
       monthName,
       allExpensesMonth,
       overduePending,
+      wallets: walletSummary.wallets.map((wallet) => ({
+        nome: wallet.nome,
+        saldo: Number(wallet.saldo ?? 0),
+      })),
+      totalWalletBalance: Number(walletSummary.totalSaldo ?? 0),
+      expensesPaidMonth: summary.despesasPagas,
+      expensesPendingMonth: summary.despesasPend,
+      receitasMes: summary.receitas,
+      saldoPrevistoMes: summary.saldoPrevisto,
       allMonthTransactions: monthRows.map((row) => ({
         descricao: row.descricao,
         categoria: row.categoria,
@@ -193,7 +216,7 @@ function IAFinanceira() {
         data: row.data,
       })),
     }
-  }, [transactions])
+  }, [transactions, summary, walletSummary])
 
   return (
     <div className="space-y-6">
