@@ -12,16 +12,16 @@ export async function listarDividas() {
   if (!user?.id) throw new Error("Sessão inválida.")
 
   const { data, error } = await supabase
-    .from("dividas_macro")
+    .from("dividas_macro") /* public.dividas_macro — sql/dividas_macro.sql */
     .select("*")
     .eq("user_id", user.id)
-    .order("criado_em", { ascending: false })
+    .order("created_at", { ascending: false })
 
   if (error) throw error
   return data ?? []
 }
 
-export async function criarDivida({ credor, valorTotal, valorRestante, status }) {
+export async function criarDivida({ credor, valor_total, valor_restante, status }) {
   const {
     data: { user },
     error: authError,
@@ -29,15 +29,15 @@ export async function criarDivida({ credor, valorTotal, valorRestante, status })
   if (authError) throw authError
   if (!user?.id) throw new Error("Sessão inválida.")
 
-  const total = Number(valorTotal)
-  const restante = valorRestante === undefined || valorRestante === "" ? total : Number(valorRestante)
+  const total = Number(valor_total)
+  const restante = valor_restante === undefined || valor_restante === "" ? total : Number(valor_restante)
 
   const { data, error } = await supabase
     .from("dividas_macro")
     .insert({
       user_id: user.id,
       credor: String(credor ?? "").trim(),
-      valor_total_original: total,
+      valor_total: total,
       valor_restante: restante,
       status: status || "Em aberto",
     })

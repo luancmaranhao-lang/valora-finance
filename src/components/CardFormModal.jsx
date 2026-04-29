@@ -1,11 +1,23 @@
-function CardFormModal({ open, formData, onChange, onClose, onSubmit, isSaving }) {
+function CardFormModal({ open, formData, onChange, onClose, onSubmit, isSaving, isEditing = false }) {
   if (!open) return null
+
+  function handleMoneyKeyDown(event) {
+    if (!event.shiftKey) return
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return
+    event.preventDefault()
+    const input = event.currentTarget
+    const current = Number(input.value || 0)
+    const delta = event.key === "ArrowUp" ? 10 : -10
+    const next = Math.max(0, current + delta)
+    input.value = String(next)
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
       <div className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-5 shadow-xl">
         <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold text-slate-900">Novo cartão</h2>
+          <h2 className="text-lg font-semibold text-slate-900">{isEditing ? "Editar cartão" : "Novo cartão"}</h2>
           <button
             type="button"
             onClick={onClose}
@@ -19,8 +31,8 @@ function CardFormModal({ open, formData, onChange, onClose, onSubmit, isSaving }
           <label className="space-y-1.5 sm:col-span-2">
             <span className="text-sm font-medium text-slate-700">Nome do Cartão</span>
             <input
-              name="nome"
-              value={formData.nome}
+              name="nome_cartao"
+              value={formData.nome_cartao}
               onChange={onChange}
               placeholder="Ex: Nubank"
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
@@ -48,9 +60,10 @@ function CardFormModal({ open, formData, onChange, onClose, onSubmit, isSaving }
               name="limite_total"
               type="number"
               min="0"
-              step="0.01"
+              step="1"
               value={formData.limite_total}
               onChange={onChange}
+              onKeyDown={handleMoneyKeyDown}
               placeholder="0,00"
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
             />
@@ -95,7 +108,7 @@ function CardFormModal({ open, formData, onChange, onClose, onSubmit, isSaving }
               disabled={isSaving}
               className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-70"
             >
-              {isSaving ? "Salvando..." : "Salvar cartão"}
+              {isSaving ? "Salvando..." : isEditing ? "Salvar alterações" : "Salvar cartão"}
             </button>
           </div>
         </form>

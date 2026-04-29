@@ -1,14 +1,14 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import AnnualSummaryModal from "../components/AnnualSummaryModal"
 import EmptyState from "../components/EmptyState"
-import PageHeader from "../components/PageHeader"
-import StatusBadge from "../components/StatusBadge"
 import {
   atualizarLancamento,
   criarLancamento,
   listarLancamentos,
   removerLancamento,
 } from "../services/lancamentosService"
+import { listarCartoes } from "../services/cartoesService"
+import { CATEGORY_DRILLDOWN_KEY } from "../constants/navigationEvents"
 import { supabase } from "../services/supabaseClient"
 import {
   dividedPayerValue,
@@ -22,8 +22,20 @@ import {
   splitTagPrefix,
 } from "../utils/lancamentoDisplay"
 
-const filters = ["Todos", "Pagos", "Pendentes", "Receitas", "Despesas", "Compartilhados", "Privados"]
+const filters = ["Todos", "Pagos", "Pendentes", "Compartilhados", "Privados"]
 const customCategoryOption = "__CUSTOM__"
+const CREDIT_PAYMENT_LABEL = "Cartão de Crédito"
+
+const PAYMENT_METHOD_OPTIONS = [
+  "PIX",
+  "Dinheiro",
+  "Débito",
+  CREDIT_PAYMENT_LABEL,
+  "Boleto",
+  "Transferência",
+  "Outro",
+]
+
 const categoryOptions = [
   "💼 Trabalho",
   "⚖️ Jurídico",
@@ -51,7 +63,8 @@ const initialFormData = {
   value: "",
   date: "",
   dueDay: "",
-  paymentMethod: "",
+  paymentMethod: "PIX",
+  cartaoId: "",
   visibility: "Privado",
   splitMethod: "50/50",
 }
@@ -102,6 +115,20 @@ function formatCurrency(value) {
     style: "currency",
     currency: "BRL",
   }).format(value)
+}
+
+function parseMoneyInput(value) {
+  const raw = String(value ?? "").trim()
+  if (!raw) return 0
+  const normalized = raw.replace(/\s/g, "").replace(/\./g, "").replace(",", ".")
+  const parsed = Number(normalized)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function normalizeMoneyDraft(value) {
+  return String(value ?? "")
+    .replace(/[^\d,.\s]/g, "")
+    .replace(/\s/g, "")
 }
 
 function normalizeUiDate(value) {
@@ -158,6 +185,7 @@ function mapDbToUi(record) {
     paymentStatus: statusRaw === "pago" ? "Pago" : "Pendente",
     payer: payerFromTag || "",
     paymentMethod: record.forma_pagamento ?? record.payment_method ?? record.paymentMethod ?? "",
+    cartaoId: record.cartao_id ?? "",
     visibility:
       visibilityRaw === "compartilhado" ? "Compartilhar no relatório do grupo" : "Privado",
     splitMethod:
@@ -192,6 +220,22 @@ function isDateInMonth(isoDate, year, monthIndex) {
   const date = parseUiDate(isoDate)
   if (!date) return false
   return date.getFullYear() === year && date.getMonth() === monthIndex
+}
+
+function resolvePaymentSignal(transaction) {
+  const isPaid = transaction.paymentStatus === "Pago"
+  if (isPaid) {
+    return { label: "Pago", tone: "paid", isRight: true }
+  }
+
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const dueDate = parseUiDate(transaction.date)
+  if (dueDate && dueDate < today) {
+    return { label: "Pendente", tone: "pending", isRight: false }
+  }
+
+  return { label: "Previsto", tone: "planned", isRight: false }
 }
 
 function buildRecurringKeyRaw(item) {
@@ -287,6 +331,11 @@ function Lancamentos() {
     return { y: d.getFullYear(), m: d.getMonth() }
   })
   const [annualOpen, setAnnualOpen] = useState(false)
+  const [formExpanded, setFormExpanded] = useState(false)
+  const [creditCards, setCreditCards] = useState([])
+  const [categoryDrilldown, setCategoryDrilldown] = useState("")
+  const [listOptionsOpen, setListOptionsOpen] = useState(false)
+  const valueInputRef = useRef(null)
 
   const transactions = useMemo(() => rawTransactions.map(mapDbToUi), [rawTransactions])
 
@@ -335,6 +384,29 @@ function Lancamentos() {
       void loadLancamentos()
     }, 0)
 
+    return () => clearTimeout(timer)
+  }, [])
+
+  useEffect(() => {
+    const stored = sessionStorage.getItem(CATEGORY_DRILLDOWN_KEY)
+    if (stored) {
+      setCategoryDrilldown(stored)
+      sessionStorage.removeItem(CATEGORY_DRILLDOWN_KEY)
+    }
+  }, [])
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      async function loadCards() {
+        try {
+          const data = await listarCartoes()
+          setCreditCards(data ?? [])
+        } catch {
+          setCreditCards([])
+        }
+      }
+      void loadCards()
+    }, 0)
     return () => clearTimeout(timer)
   }, [])
 
@@ -405,10 +477,21 @@ function Lancamentos() {
               return acc
             }, [])
 
-          setPayerOptions(uniqueOptions)
+          const sortedOptions = [...uniqueOptions].sort((a, b) => {
+            if (a.role === "self" && b.role !== "self") return -1
+            if (a.role !== "self" && b.role === "self") return 1
+            return 0
+          })
+          const defaultPayer =
+            sortedOptions.find((o) => o.role === "self")?.value ??
+            sortedOptions.find((o) => o.value === user.id)?.value ??
+            sortedOptions[0]?.value ??
+            ""
+
+          setPayerOptions(sortedOptions)
           setFormData((prev) => ({
             ...prev,
-            payer: prev.payer || uniqueOptions[0]?.value || "",
+            payer: prev.payer || defaultPayer,
           }))
         } catch {
           setPayerOptions([])
@@ -443,8 +526,23 @@ function Lancamentos() {
           splitMethod: value === dividedPayerValue ? prev.splitMethod || "50/50" : "50/50",
         }
       }
+      if (name === "paymentMethod" && value !== CREDIT_PAYMENT_LABEL) {
+        return { ...prev, paymentMethod: value, cartaoId: "" }
+      }
+      if (name === "value") {
+        return { ...prev, value: normalizeMoneyDraft(value) }
+      }
       return { ...prev, [name]: value }
     })
+  }
+
+  function handleMoneyStepKeyDown(event, setValue) {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return
+    event.preventDefault()
+    const current = parseMoneyInput(event.currentTarget.value || 0)
+    const delta = event.shiftKey ? (event.key === "ArrowUp" ? 10 : -10) : event.key === "ArrowUp" ? 1 : -1
+    const next = Math.max(0, current + delta)
+    setValue(String(next).replace(".", ","))
   }
 
   function resolveCategoryValue() {
@@ -455,7 +553,12 @@ function Lancamentos() {
   }
 
   function resetForm() {
-    setFormData(initialFormData)
+    const selfPayer =
+      payerOptions.find((o) => o.role === "self")?.value ??
+      payerOptions.find((o) => o.value === currentUserId)?.value ??
+      payerOptions[0]?.value ??
+      ""
+    setFormData({ ...initialFormData, payer: selfPayer })
     setCustomCategory("")
     setEditingId(null)
   }
@@ -466,13 +569,19 @@ function Lancamentos() {
       setMessage("Itens previstos não podem ser editados. Cadastre o lançamento real no mês ou ajuste o modelo em um mês anterior.")
       return
     }
+    setFormExpanded(true)
     const isDefaultCategory = categoryOptions.includes(transaction.category)
     setEditingId(transaction.id)
     setFormData({
       type: transaction.type,
       recurrenceType: transaction.recurrenceType ?? "Única",
       paymentStatus: transaction.paymentStatus ?? "Pendente",
-      payer: transaction.payer || payerOptions[0]?.value || "",
+      payer:
+        transaction.payer ||
+        payerOptions.find((o) => o.role === "self")?.value ||
+        currentUserId ||
+        payerOptions[0]?.value ||
+        "",
       isInformative: Boolean(transaction.isInformative),
       installments: "1",
       description: transaction.description,
@@ -481,6 +590,7 @@ function Lancamentos() {
       date: transaction.date,
       dueDay: transaction.dueDay ?? "",
       paymentMethod: transaction.paymentMethod,
+      cartaoId: transaction.cartaoId ?? "",
       visibility: transaction.visibility,
       splitMethod: transaction.splitRule || "50/50",
     })
@@ -507,10 +617,33 @@ function Lancamentos() {
     }
   }
 
+  async function handleTogglePaymentStatus(transaction) {
+    if (transaction.isProjected) return
+
+    const nextStatus = transaction.paymentStatus === "Pago" ? "pendente" : "pago"
+    try {
+      await atualizarLancamento(transaction.id, { status: nextStatus })
+      window.dispatchEvent(new Event("lancamentos:updated"))
+      setRawTransactions((prev) =>
+        prev.map((item) =>
+          String(item.id) === String(transaction.id)
+            ? {
+                ...item,
+                status: nextStatus,
+              }
+            : item,
+        ),
+      )
+    } catch {
+      setMessageType("error")
+      setMessage("Não foi possível atualizar o status do pagamento.")
+    }
+  }
+
   async function handleSubmit(event) {
     event.preventDefault()
 
-    const normalizedValue = Number(formData.value)
+    const normalizedValue = parseMoneyInput(formData.value)
     const normalizedDueDay = Number(formData.dueDay || 0)
     const normalizedInstallments = Number(formData.installments || 1)
     const normalizedCategory = resolveCategoryValue()
@@ -525,6 +658,15 @@ function Lancamentos() {
     if (isRecurring && (!normalizedDueDay || normalizedDueDay < 1 || normalizedDueDay > 31)) {
       setMessageType("error")
       setMessage("Informe um dia de vencimento válido entre 1 e 31 para recorrências.")
+      return
+    }
+    if (
+      formData.paymentMethod.trim() === CREDIT_PAYMENT_LABEL &&
+      creditCards.length > 0 &&
+      !formData.cartaoId
+    ) {
+      setMessageType("error")
+      setMessage("Selecione o cartão usado nesta compra ou cadastre um em Cartões.")
       return
     }
 
@@ -563,6 +705,10 @@ function Lancamentos() {
         status: paymentStatusMap[formData.paymentStatus] ?? "pendente",
         visibilidade: visibilityMap[formData.visibility] ?? "privado",
         metodo_divisao: isDivided ? (divisionMethodMap[formData.splitMethod] ?? null) : null,
+        cartao_id:
+          formData.paymentMethod.trim() === CREDIT_PAYMENT_LABEL && formData.cartaoId
+            ? formData.cartaoId
+            : null,
       }
 
       if (editingId) {
@@ -575,6 +721,7 @@ function Lancamentos() {
 
       setMessageType("success")
       setMessage(editingId ? "Lançamento atualizado com sucesso." : "Lançamento adicionado com sucesso.")
+      setFormExpanded(false)
       resetForm()
     } catch (error) {
       setMessageType("error")
@@ -585,15 +732,62 @@ function Lancamentos() {
   }
 
   const filteredTransactions = monthScopedRows.filter((item) => {
+    if (item.type !== "Despesa") return false
+    if (categoryDrilldown && String(item.category) !== categoryDrilldown) {
+      return false
+    }
     if (filter === "Todos") return true
     if (filter === "Pagos") return item.paymentStatus === "Pago"
     if (filter === "Pendentes") return item.paymentStatus === "Pendente"
-    if (filter === "Receitas") return item.type === "Receita"
-    if (filter === "Despesas") return item.type === "Despesa"
     if (filter === "Compartilhados") return item.visibility === "Compartilhar no relatório do grupo"
     if (filter === "Privados") return item.visibility === "Privado"
     return true
   })
+
+  const footerTotals = useMemo(() => {
+    let receitasTotais = 0
+    let gastosGeral = 0
+    let despesasPagas = 0
+    let despesasPendentes = 0
+    for (const t of filteredTransactions) {
+      const v = Math.abs(Number(t.value ?? 0))
+      if (t.type === "Receita") {
+        receitasTotais += v
+        continue
+      }
+      gastosGeral += v
+      if (t.paymentStatus === "Pago") despesasPagas += v
+      if (t.paymentStatus === "Pendente") despesasPendentes += v
+    }
+    const saldoRestanteMes = receitasTotais - gastosGeral
+    return {
+      receitasTotais,
+      gastosGeral,
+      despesasPagas,
+      despesasPendentes,
+      saldoRestanteMes,
+    }
+  }, [filteredTransactions])
+
+  const paidPendingSplit = useMemo(() => {
+    const pago = footerTotals.despesasPagas
+    const pend = footerTotals.despesasPendentes
+    const sum = pago + pend
+    if (sum <= 0) return { paidPct: 0, pendPct: 0 }
+    return {
+      paidPct: (pago / sum) * 100,
+      pendPct: (pend / sum) * 100,
+    }
+  }, [footerTotals])
+
+  useEffect(() => {
+    if (!listOptionsOpen) return
+    function onKey(ev) {
+      if (ev.key === "Escape") setListOptionsOpen(false)
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [listOptionsOpen])
 
   function resolveResponsibleIndicator(transaction) {
     const resolved = resolvePayerShortLabel(transaction.payer, { currentUserId, nameByUserId })
@@ -633,45 +827,16 @@ function Lancamentos() {
     new Date(viewYM.y, viewYM.m, 1),
   )
   const summaryYear = new Date().getFullYear()
+  const showFormSection = editingId !== null || formExpanded
+
+  useEffect(() => {
+    if (!showFormSection) return
+    const timer = setTimeout(() => valueInputRef.current?.focus(), 0)
+    return () => clearTimeout(timer)
+  }, [showFormSection, editingId])
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Lançamentos"
-        subtitle="Registre receitas, despesas e defina o que será privado ou compartilhado."
-      />
-
-      <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center justify-center gap-1 sm:justify-start">
-          <button
-            type="button"
-            aria-label="Mês anterior"
-            onClick={() => shiftViewMonth(-1)}
-            className="flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-slate-200 text-lg font-semibold text-slate-800 transition hover:bg-slate-100"
-          >
-            ‹
-          </button>
-          <span className="min-w-[12rem] select-none px-2 text-center text-sm font-semibold capitalize text-slate-900 sm:text-base">
-            {monthTitle}
-          </span>
-          <button
-            type="button"
-            aria-label="Próximo mês"
-            onClick={() => shiftViewMonth(1)}
-            className="flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-slate-200 text-lg font-semibold text-slate-800 transition hover:bg-slate-100"
-          >
-            ›
-          </button>
-        </div>
-        <button
-          type="button"
-          onClick={() => setAnnualOpen(true)}
-          className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-center text-sm font-semibold text-slate-800 transition hover:bg-slate-100"
-        >
-          Ver resumo anual
-        </button>
-      </div>
-
       {message ? (
         <div
           className={`rounded-2xl border px-4 py-3 text-sm shadow-sm ${
@@ -684,10 +849,36 @@ function Lancamentos() {
         </div>
       ) : null}
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">
-          {editingId ? "Editar lançamento" : "Novo lançamento"}
-        </h2>
+      <section className="rounded-2xl border border-dashed border-slate-300 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">
+              {editingId ? "Editar lançamento de despesas" : "Novo lançamento de despesas"}
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              {editingId
+                ? "Ajuste os campos e salve. Ou cancele para voltar à lista."
+                : "Formulário opcional — a lista abaixo é o foco principal desta tela."}
+            </p>
+          </div>
+          {!editingId ? (
+            <button
+              type="button"
+              onClick={() => setFormExpanded((open) => !open)}
+              className="valora-gold-button min-h-11 shrink-0 rounded-xl px-4 py-2.5 text-sm font-semibold"
+            >
+              {formExpanded ? "Recolher formulário" : "Abrir formulário"}
+            </button>
+          ) : null}
+        </div>
+
+        {!showFormSection && !editingId ? (
+          <p className="mt-4 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            Toque em <strong>Abrir formulário</strong> quando quiser registrar ou planejar um lançamento.
+          </p>
+        ) : null}
+
+        {(showFormSection || editingId) && (
         <form className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3" onSubmit={handleSubmit}>
           <label className="space-y-1.5">
             <span className="text-sm font-medium text-slate-700">Tipo</span>
@@ -812,11 +1003,12 @@ function Lancamentos() {
             <span className="text-sm font-medium text-slate-700">Valor</span>
             <input
               name="value"
-              type="number"
-              min="0"
-              step="0.01"
+              type="text"
+              inputMode="decimal"
               value={formData.value}
               onChange={handleChange}
+              onKeyDown={(e) => handleMoneyStepKeyDown(e, (next) => setFormData((prev) => ({ ...prev, value: next })))}
+              ref={valueInputRef}
               placeholder="0,00"
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-slate-300"
             />
@@ -851,14 +1043,41 @@ function Lancamentos() {
 
           <label className="space-y-1.5">
             <span className="text-sm font-medium text-slate-700">Forma de pagamento</span>
-            <input
+            <select
               name="paymentMethod"
               value={formData.paymentMethod}
               onChange={handleChange}
-              placeholder="Ex: PIX, cartão, débito"
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-slate-300"
-            />
+            >
+              {!PAYMENT_METHOD_OPTIONS.includes(formData.paymentMethod) && formData.paymentMethod ? (
+                <option value={formData.paymentMethod}>{formData.paymentMethod}</option>
+              ) : null}
+              {PAYMENT_METHOD_OPTIONS.map((opt) => (
+                <option key={opt} value={opt}>
+                  {opt}
+                </option>
+              ))}
+            </select>
           </label>
+
+          {formData.paymentMethod === CREDIT_PAYMENT_LABEL && creditCards.length > 0 ? (
+            <label className="space-y-1.5">
+              <span className="text-sm font-medium text-slate-700">Cartão utilizado</span>
+              <select
+                name="cartaoId"
+                value={formData.cartaoId}
+                onChange={handleChange}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-slate-300"
+              >
+                <option value="">Selecione o cartão...</option>
+                {creditCards.map((card) => (
+                  <option key={card.id} value={card.id}>
+                    {card.nome ?? card.name ?? "Cartão"}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
 
           <label className="space-y-1.5">
             <span className="text-sm font-medium text-slate-700">Visibilidade</span>
@@ -890,15 +1109,33 @@ function Lancamentos() {
             </label>
           ) : null}
 
-          <label className="mt-1 flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-700">
+          <label className="mt-1 flex items-center gap-2.5 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700">
             <input
               name="isInformative"
               type="checkbox"
               checked={formData.isInformative}
               onChange={handleChange}
-              className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-300"
+              className="sr-only"
             />
-            Apenas informativo para o parceiro(a)
+            <span
+              className={`relative h-5 w-9 shrink-0 rounded-md border border-slate-500/70 bg-gradient-to-b from-slate-500 to-slate-700 shadow-[inset_0_1px_2px_rgba(0,0,0,0.45)] transition-colors duration-300 ${
+                formData.isInformative ? "ring-1 ring-emerald-300/40" : ""
+              }`}
+            >
+              <span
+                className={`absolute inset-[2px] rounded-[4px] transition-colors duration-300 ${
+                  formData.isInformative
+                    ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.75)]"
+                    : "bg-slate-700"
+                }`}
+              />
+              <span
+                className={`absolute left-[2px] top-[2px] h-4 w-4 rounded-[4px] border border-slate-300/80 bg-gradient-to-b from-slate-100 via-slate-300 to-slate-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_1px_2px_rgba(15,23,42,0.45)] transition-transform duration-300 ease-in-out ${
+                  formData.isInformative ? "translate-x-4" : "translate-x-0"
+                }`}
+              />
+            </span>
+            <span>Apenas informativo para o parceiro(a)</span>
           </label>
 
           <div className="flex items-end gap-2">
@@ -914,103 +1151,223 @@ function Lancamentos() {
             <button
               type="submit"
               disabled={isSaving}
-              className="w-full rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
+              className="valora-gold-button w-full rounded-xl px-4 py-2.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-70"
             >
               {isSaving ? "Salvando..." : editingId ? "Salvar alterações" : "Adicionar lançamento"}
             </button>
           </div>
         </form>
+        )}
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <p className="mb-3 text-xs text-slate-500">
-          Exibindo o mês selecionado. Em meses atuais ou futuros, despesas <strong>Recorrente Fixa</strong> sem lançamento
-          real aparecem como <strong>Previsto</strong>. Parcelas de compras parceladas aparecem na data de cada parcela.
-        </p>
-        <div className="mb-4 flex flex-wrap gap-2">
-          {filters.map((item) => (
-            <button
-              key={item}
-              type="button"
-              onClick={() => setFilter(item)}
-              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition-all ${
-                filter === item
-                  ? "border-slate-900 bg-slate-900 text-white"
-                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
-              }`}
-            >
-              {item}
-            </button>
-          ))}
+      <section className="relative overflow-hidden rounded-2xl border border-[#d8c08a]/45 bg-[#f8f2e3]/80 shadow-sm">
+        <div className="border-b border-[#d8c08a]/35 bg-[#fbf6ea]/85 px-4 py-3 sm:px-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="text-base font-bold tracking-tight text-slate-900 sm:text-lg">Lançamentos</h2>
+              <p className="mt-0.5 text-[11px] font-medium text-slate-500">Visão mensal · toque na linha para contexto</p>
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <span
+                className={`mr-0.5 h-2 w-2 rounded-full ${
+                  filter !== "Todos" || categoryDrilldown
+                    ? "bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.7)]"
+                    : "bg-slate-300/80"
+                }`}
+                title={filter !== "Todos" || categoryDrilldown ? "Filtros ativos" : "Sem filtros extras"}
+              />
+              <button
+                type="button"
+                aria-label="Abrir filtros da lista"
+                onClick={() => setListOptionsOpen(true)}
+                className="flex min-h-10 min-w-10 items-center justify-center rounded-full border border-slate-200/90 bg-white text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 active:scale-[0.96]"
+              >
+                <svg className="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" strokeWidth={1.75} stroke="currentColor" aria-hidden>
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M3 5h18l-6.5 7.3v5.2L10 21v-8.7L3 5Z"
+                  />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-3 grid gap-2.5 sm:grid-cols-3">
+            <div className="valora-metal-card rounded-2xl px-2.5 py-2">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7a5b16]">Total gastos</p>
+              <p className="valora-num mt-1 text-2xl font-semibold text-[#2e220b]">{formatCurrency(footerTotals.gastosGeral)}</p>
+            </div>
+
+            <div className="valora-metal-card rounded-2xl px-2.5 py-2">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7a5b16]">Pagas</p>
+              <p className="valora-num mt-1 text-2xl font-semibold text-emerald-700">{formatCurrency(footerTotals.despesasPagas)}</p>
+            </div>
+
+            <div className="valora-metal-card rounded-2xl px-2.5 py-2">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7a5b16]">Pendentes</p>
+              <p className="valora-num mt-1 text-2xl font-semibold text-amber-800">{formatCurrency(footerTotals.despesasPendentes)}</p>
+            </div>
+          </div>
+
+          <div className="mt-3 space-y-1.5">
+            <div className="flex items-center justify-between text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <span>Pago vs pendente</span>
+              <span className="normal-case text-slate-400">
+                {footerTotals.despesasPagas + footerTotals.despesasPendentes > 0
+                  ? `${paidPendingSplit.paidPct.toFixed(0)}% quitado`
+                  : "—"}
+              </span>
+            </div>
+            <div className="flex h-1.5 overflow-hidden rounded-full bg-slate-900/10 shadow-inner ring-1 ring-white/40">
+              <div
+                className="h-full bg-gradient-to-r from-emerald-400 to-teal-400 shadow-[0_0_14px_rgba(52,211,153,0.65)] transition-[width] duration-300 ease-out"
+                style={{ width: `${paidPendingSplit.paidPct}%` }}
+              />
+              <div
+                className="h-full bg-gradient-to-r from-amber-400 to-orange-400 shadow-[0_0_14px_rgba(251,191,36,0.55)] transition-[width] duration-300 ease-out"
+                style={{ width: `${paidPendingSplit.pendPct}%` }}
+              />
+            </div>
+          </div>
+
         </div>
 
+        <div className="flex justify-center px-4 pb-3 pt-4">
+          <div className="inline-flex items-center gap-1 rounded-full border border-[#d8c08a]/45 bg-white/90 p-1 shadow-sm">
+            <button
+              type="button"
+              aria-label="Mês anterior"
+              onClick={() => shiftViewMonth(-1)}
+              className="valora-gold-menu flex min-h-11 min-w-11 items-center justify-center rounded-full text-slate-700 transition active:scale-[0.96]"
+            >
+              <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden>
+                <path
+                  fillRule="evenodd"
+                  d="M12.79 5.23a.75.75 0 0 1 .02 1.06L8.832 10l3.938 3.71a.75.75 0 1 1-1.04 1.08l-4.5-4.25a.75.75 0 0 1 0-1.08l4.5-4.25a.75.75 0 0 1 1.06.02Z"
+                  clipRule="evenodd"
+                />
+              </svg>
+            </button>
+            <span className="min-w-[11rem] select-none px-3 text-center text-sm font-bold capitalize tracking-tight text-slate-900 sm:min-w-[13rem] sm:text-base">
+              {monthTitle}
+            </span>
+            <button
+              type="button"
+              aria-label="Próximo mês"
+              onClick={() => shiftViewMonth(1)}
+              className="valora-gold-menu flex min-h-11 min-w-11 items-center justify-center rounded-full text-slate-700 transition active:scale-[0.96]"
+            >
+              <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden>
+                <path
+                  fillRule="evenodd"
+                  d="M7.21 14.77a.75.75 0 0 1-.02-1.06L11.168 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06.02Z"
+                  clipRule="evenodd"
+                />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        {categoryDrilldown ? (
+          <div className="mx-4 mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-indigo-300/40 bg-indigo-50/90 px-3 py-2 text-xs text-indigo-950 shadow-sm ring-1 ring-indigo-400/15">
+            <span className="font-medium">
+              Categoria: <strong className="font-semibold">{categoryDrilldown}</strong>
+            </span>
+            <button
+              type="button"
+              onClick={() => setCategoryDrilldown("")}
+              className="rounded-lg border border-indigo-300/60 bg-white px-2.5 py-1 text-[11px] font-semibold text-indigo-900 hover:bg-indigo-50"
+            >
+              Limpar
+            </button>
+          </div>
+        ) : null}
+
         {isLoading ? (
-          <EmptyState title="Carregando lancamentos" description="Buscando movimentacoes mais recentes..." />
+          <div className="px-4 pb-6">
+            <EmptyState title="Carregando lançamentos" description="Buscando movimentações mais recentes..." />
+          </div>
         ) : (
-          <div>
-            <table className="w-full border-separate border-spacing-y-1 text-sm">
+          <div className="overflow-x-auto px-2 pb-5 sm:px-4">
+            <table className="w-full border-collapse text-sm">
               <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-slate-500">
-                  <th className="px-2 py-2">Data</th>
-                  <th className="px-2 py-2">Descrição</th>
-                  <th className="hidden px-2 py-2 md:table-cell">Recorrência</th>
-                  <th className="hidden px-2 py-2 md:table-cell">Pagamento</th>
-                  <th className="hidden px-2 py-2 lg:table-cell">Categoria</th>
-                  <th className="hidden px-2 py-2 lg:table-cell">Ações</th>
-                  <th className="px-2 py-2 text-right">Valor</th>
+                <tr className="text-left text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">
+                  <th className="rounded-tl-xl bg-slate-100/95 px-3 py-2.5 font-semibold">Data</th>
+                  <th className="bg-slate-100/95 px-3 py-2.5 font-semibold">Descrição</th>
+                  <th className="hidden bg-slate-100/95 px-3 py-2.5 font-semibold md:table-cell">Recorrência</th>
+                  <th className="hidden bg-slate-100/95 px-3 py-2.5 font-semibold md:table-cell">Pagamento</th>
+                  <th className="hidden bg-slate-100/95 px-3 py-2.5 font-semibold lg:table-cell">Categoria</th>
+                  <th className="hidden bg-slate-100/95 px-3 py-2.5 font-semibold lg:table-cell">Ações</th>
+                  <th className="rounded-tr-xl bg-slate-100/95 px-3 py-2.5 text-right font-semibold">Valor</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredTransactions.map((transaction) => {
+                {filteredTransactions.map((transaction, rowIdx) => {
                   const responsibleIndicator = resolveResponsibleIndicator(transaction)
+                  const zebra = rowIdx % 2 === 0 ? "bg-white/[0.97]" : "bg-slate-50/[0.85]"
                   return (
-                    <tr key={transaction.id} className="rounded-xl border border-slate-200 bg-slate-50/40">
-                    <td className="rounded-l-xl px-2 py-2 text-xs text-slate-600 md:text-sm">{transaction.date}</td>
-                    <td className="px-2 py-2">
-                      <div className="flex items-center gap-2">
-                        <span
-                          title={responsibleIndicator.title}
-                          className={`inline-flex h-2.5 w-2.5 shrink-0 rounded-full ${responsibleIndicator.colorClass}`}
-                        />
-                        <p className="truncate text-sm font-medium text-slate-900">{transaction.description}</p>
-                      </div>
-                    </td>
-                    <td className="hidden px-2 py-2 text-slate-700 md:table-cell">{transaction.recurrenceType}</td>
-                    <td className="hidden px-2 py-2 md:table-cell">
-                      <div className="flex flex-wrap items-center gap-1">
-                        {transaction.isProjected ? <StatusBadge label="Previsto" tone="info" /> : null}
-                        <StatusBadge
-                          label={transaction.paymentStatus}
-                          tone={transaction.paymentStatus === "Pago" ? "success" : "warning"}
-                        />
-                      </div>
-                    </td>
-                    <td className="hidden px-2 py-2 text-slate-700 lg:table-cell">{transaction.category}</td>
-                    <td className="hidden px-2 py-2 lg:table-cell">
-                      {transaction.isProjected ? (
-                        <span className="text-xs text-slate-400">Somente leitura</span>
-                      ) : (
+                    <tr
+                      key={transaction.id}
+                      className={`group transition-colors duration-150 ease-out ${zebra} hover:bg-emerald-400/[0.07] hover:shadow-[inset_0_0_0_9999px_rgba(52,211,153,0.06)]`}
+                    >
+                      <td className="px-3 py-2.5 text-xs text-slate-600 md:text-sm">{transaction.date}</td>
+                      <td className="px-3 py-2.5">
                         <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleEdit(transaction)}
-                            className="rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 transition-all hover:bg-blue-100"
-                          >
-                            Editar
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void handleRemove(transaction.id)}
-                            className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition-all hover:bg-rose-100"
-                          >
-                            Remover
-                          </button>
+                          <span
+                            title={responsibleIndicator.title}
+                            className={`inline-flex h-2.5 w-2.5 shrink-0 rounded-full ${responsibleIndicator.colorClass}`}
+                          />
+                          <p className="truncate text-sm font-medium text-slate-900">{transaction.description}</p>
                         </div>
-                      )}
-                    </td>
-                    <td className="rounded-r-xl px-2 py-2 text-right text-sm font-bold text-slate-900 md:text-base">
-                      {formatCurrency(transaction.value)}
-                    </td>
+                      </td>
+                      <td className="hidden px-3 py-2.5 text-slate-700 md:table-cell">{transaction.recurrenceType}</td>
+                      <td className="hidden px-3 py-2.5 md:table-cell">
+                        {(() => {
+                          const signal = resolvePaymentSignal(transaction)
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => void handleTogglePaymentStatus(transaction)}
+                              disabled={transaction.isProjected}
+                              className={`valora-metal-switch valora-metal-switch--${signal.tone} ${
+                                transaction.isProjected ? "cursor-not-allowed opacity-65" : "cursor-pointer"
+                              }`}
+                              aria-label={`Alterar status de pagamento para ${transaction.paymentStatus === "Pago" ? "Pendente" : "Pago"}`}
+                              title={transaction.isProjected ? "Item previsto não pode ser alterado" : "Clique para alternar status"}
+                            >
+                              <span className={`valora-metal-switch-knob ${signal.isRight ? "ml-auto" : ""}`} />
+                              <span className="valora-metal-switch-label">{signal.label}</span>
+                            </button>
+                          )
+                        })()}
+                      </td>
+                      <td className="hidden px-3 py-2.5 text-slate-700 lg:table-cell">{transaction.category}</td>
+                      <td className="hidden px-3 py-2.5 lg:table-cell">
+                        {transaction.isProjected ? (
+                          <span className="text-xs text-slate-400">Somente leitura</span>
+                        ) : (
+                          <div className="flex items-center gap-2 opacity-90 transition group-hover:opacity-100">
+                            <button
+                              type="button"
+                              onClick={() => handleEdit(transaction)}
+                              className="rounded-lg border border-blue-200/90 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 transition-all hover:border-blue-300 hover:bg-blue-100 active:scale-[0.98]"
+                            >
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleRemove(transaction.id)}
+                              className="rounded-lg border border-rose-200/90 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition-all hover:border-rose-300 hover:bg-rose-100 active:scale-[0.98]"
+                            >
+                              Remover
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                      <td className="valora-num px-3 py-2.5 text-right text-sm font-semibold text-slate-950 md:text-[15px]">
+                        {formatCurrency(transaction.value)}
+                      </td>
                     </tr>
                   )
                 })}
@@ -1018,6 +1375,115 @@ function Lancamentos() {
             </table>
           </div>
         )}
+
+        {listOptionsOpen ? (
+          <>
+            <button
+              type="button"
+              aria-label="Fechar opções"
+              className="fixed inset-0 z-[60] cursor-default border-0 bg-slate-950/50 backdrop-blur-[2px] transition-opacity"
+              onClick={() => setListOptionsOpen(false)}
+            />
+            <aside
+              className="fixed right-0 top-0 z-[70] flex h-full w-full max-w-sm flex-col border-l border-slate-200/80 bg-white shadow-2xl"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Filtros e opções"
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+                <h3 className="text-sm font-bold text-slate-900">Opções da lista</h3>
+                <button
+                  type="button"
+                  onClick={() => setListOptionsOpen(false)}
+                  className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+                  aria-label="Fechar"
+                >
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <div className="flex-1 space-y-6 overflow-y-auto px-4 py-4">
+                <div>
+                  <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-slate-500">Filtrar por</p>
+                  <div className="flex flex-wrap gap-2">
+                    {filters.map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        onClick={() => setFilter(item)}
+                        className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-all active:scale-[0.98] ${
+                          filter === item
+                            ? "border-slate-900 bg-slate-900 text-white shadow-md"
+                            : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 hover:bg-white"
+                        }`}
+                      >
+                        {item}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {categoryDrilldown ? (
+                  <div className="rounded-xl border border-indigo-200 bg-indigo-50/80 p-3 text-xs text-indigo-950">
+                    <p className="font-medium">Categoria ativa: {categoryDrilldown}</p>
+                    <button
+                      type="button"
+                      onClick={() => setCategoryDrilldown("")}
+                      className="mt-2 w-full rounded-lg border border-indigo-300 bg-white py-2 text-xs font-semibold text-indigo-900"
+                    >
+                      Limpar categoria
+                    </button>
+                  </div>
+                ) : null}
+
+                <div>
+                  <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-slate-500">Ir para o mês</p>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <input
+                      type="month"
+                      value={`${viewYM.y}-${String(viewYM.m + 1).padStart(2, "0")}`}
+                      onChange={(e) => {
+                        const v = e.target.value
+                        if (!v) return
+                        const [ys, ms] = v.split("-").map(Number)
+                        if (ys && ms >= 1 && ms <= 12) setViewYM({ y: ys, m: ms - 1 })
+                      }}
+                      className="min-h-11 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-slate-300"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = new Date()
+                        setViewYM({ y: d.getFullYear(), m: d.getMonth() })
+                      }}
+                      className="min-h-11 shrink-0 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                    >
+                      Mês atual
+                    </button>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 text-[11px] leading-relaxed text-slate-600">
+                  Em meses atuais ou futuros, despesas <strong className="text-slate-800">Recorrente Fixa</strong> sem
+                  lançamento real aparecem como <strong className="text-slate-800">Previsto</strong>. Parcelas aparecem na
+                  data de cada parcela.
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setListOptionsOpen(false)
+                    setAnnualOpen(true)
+                  }}
+                  className="w-full rounded-xl border border-slate-200 bg-white py-3 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50"
+                >
+                  Ver resumo anual
+                </button>
+              </div>
+            </aside>
+          </>
+        ) : null}
       </section>
 
       <AnnualSummaryModal

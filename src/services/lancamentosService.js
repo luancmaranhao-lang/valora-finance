@@ -46,6 +46,11 @@ function normalizeLancamentoPayload(lancamento = {}) {
         : Number(payload.numero_parcelas)
   }
 
+  if ("cartao_id" in payload) {
+    payload.cartao_id =
+      payload.cartao_id === null || payload.cartao_id === undefined || payload.cartao_id === "" ? null : payload.cartao_id
+  }
+
   return payload
 }
 
@@ -74,6 +79,62 @@ function splitInstallments(totalValue, count) {
   })
 }
 
+function extractDebtCredorFromDescription(description) {
+  const raw = String(description ?? "").trim()
+  const prefixes = ["Parcela planejada da dívida — ", "Pagamento dívida macro — "]
+  for (const prefix of prefixes) {
+    if (raw.startsWith(prefix)) {
+      return raw.slice(prefix.length).trim()
+    }
+  }
+  return ""
+}
+
+async function applyDebtReductionFromPaidLancamento(previousRow, nextPayload) {
+  const previousStatus = String(previousRow?.status ?? "").toLowerCase()
+  const nextStatus = String(nextPayload?.status ?? "").toLowerCase()
+  if (previousStatus === "pago" || nextStatus !== "pago") return
+
+  const tipo = String(nextPayload?.tipo ?? previousRow?.tipo ?? "").toLowerCase()
+  if (tipo !== "despesa") return
+
+  const description = nextPayload?.descricao ?? previousRow?.descricao
+  const credor = extractDebtCredorFromDescription(description)
+  if (!credor) return
+
+  const userId = previousRow?.user_id
+  if (!userId) return
+
+  const valorLancamento = Number(nextPayload?.valor ?? previousRow?.valor ?? 0)
+  if (!Number.isFinite(valorLancamento) || valorLancamento <= 0) return
+
+  const { data: debtRow, error: debtError } = await supabase
+    .from("dividas_macro")
+    .select("id, valor_restante, valor_total, status")
+    .eq("user_id", userId)
+    .eq("credor", credor)
+    .order("created_at", { ascending: false })
+    .maybeSingle()
+
+  if (debtError || !debtRow) return
+
+  const restanteAtual = Number(debtRow.valor_restante ?? 0)
+  if (restanteAtual <= 0) return
+
+  const abatido = Math.min(restanteAtual, valorLancamento)
+  const novoRestante = Math.max(0, restanteAtual - abatido)
+  const novoStatus = novoRestante <= 0 ? "Quitada" : debtRow.status
+
+  await supabase
+    .from("dividas_macro")
+    .update({
+      valor_restante: novoRestante,
+      status: novoStatus,
+    })
+    .eq("id", debtRow.id)
+    .eq("user_id", userId)
+}
+
 export async function listarLancamentos() {
   const {
     data: { user },
@@ -90,7 +151,7 @@ export async function listarLancamentos() {
     query = query.eq("user_id", user.id)
   }
 
-  const { data, error } = await query.order("data", { ascending: false }).order("criado_em", { ascending: false })
+  const { data, error } = await query.order("data", { ascending: false }).order("created_at", { ascending: false })
 
   if (error) {
     throw error
@@ -219,6 +280,15 @@ export async function atualizarLancamento(id, lancamento) {
   }
 
   const payload = normalizeLancamentoPayload(lancamento)
+  let existingQuery = supabase.from("lancamentos").select("*").eq("id", id)
+  if (user?.id) {
+    existingQuery = existingQuery.eq("user_id", user.id)
+  }
+  const { data: existingRow, error: existingError } = await existingQuery.single()
+  if (existingError) {
+    throw existingError
+  }
+
   let query = supabase.from("lancamentos").update(payload).eq("id", id)
 
   if (user?.id) {
@@ -230,6 +300,8 @@ export async function atualizarLancamento(id, lancamento) {
   if (error) {
     throw error
   }
+
+  await applyDebtReductionFromPaidLancamento(existingRow, payload)
 
   return data
 }

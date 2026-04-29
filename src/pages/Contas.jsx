@@ -253,7 +253,7 @@ function Contas() {
               name="value"
               type="number"
               min="0"
-              step="0.01"
+              step="1"
               value={formData.value}
               onChange={handleChange}
               placeholder="0,00"

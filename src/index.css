@@ -1,1 +1,385 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Roboto+Mono:wght@500;600;700&display=swap");
+
 @import "tailwindcss";
+
+@layer base {
+  :root {
+    --valora-gold: #d4af37;
+    --valora-gold-deep: #b58f21;
+    --valora-gold-soft: #eac05c;
+    --valora-ink: #0b0a08;
+  }
+
+  body {
+    font-family:
+      Inter,
+      ui-sans-serif,
+      system-ui,
+      sans-serif;
+    font-optical-sizing: auto;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+.valora-num {
+  font-family:
+    "Roboto Mono",
+    ui-monospace,
+    monospace;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.text-valora-gold {
+  color: var(--valora-gold);
+}
+
+.bg-valora-gold {
+  background-color: var(--valora-gold);
+}
+
+.logo-valora {
+  object-fit: contain;
+  transform: scale(1.8);
+  transform-origin: left center;
+  filter: drop-shadow(0px 4px 6px rgba(0, 0, 0, 0.1));
+}
+
+.valora-gold-button {
+  border-radius: 16px;
+  border: 1px solid rgba(181, 143, 33, 0.55);
+  background:
+    radial-gradient(circle at 14% 18%, rgba(255, 255, 255, 0.42) 0 8%, rgba(255, 255, 255, 0) 18%),
+    radial-gradient(circle at 34% 72%, rgba(255, 255, 255, 0.28) 0 6%, rgba(255, 255, 255, 0) 16%),
+    radial-gradient(circle at 79% 22%, rgba(255, 255, 255, 0.33) 0 7%, rgba(255, 255, 255, 0) 17%),
+    radial-gradient(circle at 88% 74%, rgba(255, 255, 255, 0.2) 0 5%, rgba(255, 255, 255, 0) 14%),
+    radial-gradient(circle at 18% 14%, rgba(255, 245, 205, 0.45), rgba(255, 255, 255, 0) 34%),
+    radial-gradient(circle at 82% 88%, rgba(98, 67, 12, 0.22), rgba(0, 0, 0, 0) 38%),
+    repeating-linear-gradient(
+      110deg,
+      rgba(255, 255, 255, 0.055) 0px,
+      rgba(255, 255, 255, 0.055) 2px,
+      rgba(0, 0, 0, 0.03) 2px,
+      rgba(0, 0, 0, 0.03) 4px
+    ),
+    linear-gradient(135deg, var(--valora-gold-deep), var(--valora-gold-soft));
+  color: #fffdf7;
+  box-shadow:
+    inset 0 9px 12px rgba(255, 247, 219, 0.22),
+    inset 0 -7px 10px rgba(76, 53, 10, 0.32),
+    inset 0 2px 0 rgba(255, 248, 224, 0.65),
+    inset 0 -2px 0 rgba(78, 55, 11, 0.38),
+    inset 1px 0 0 rgba(255, 241, 193, 0.22),
+    inset -1px 0 0 rgba(102, 72, 14, 0.25),
+    0 2px 0 rgba(82, 57, 10, 0.6),
+    0 10px 18px rgba(93, 66, 10, 0.3);
+  text-shadow:
+    0 -1px 0 rgba(80, 56, 11, 0.75),
+    0 1px 1px rgba(255, 241, 201, 0.2);
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.valora-gold-button::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(circle at 18% 28%, rgba(255, 255, 255, 0.35) 0 2px, rgba(255, 255, 255, 0) 7px),
+    radial-gradient(circle at 33% 66%, rgba(255, 255, 255, 0.28) 0 2px, rgba(255, 255, 255, 0) 8px),
+    radial-gradient(circle at 55% 38%, rgba(255, 255, 255, 0.32) 0 2.5px, rgba(255, 255, 255, 0) 9px),
+    radial-gradient(circle at 74% 58%, rgba(255, 255, 255, 0.3) 0 2px, rgba(255, 255, 255, 0) 8px),
+    radial-gradient(circle at 86% 30%, rgba(255, 255, 255, 0.26) 0 1.8px, rgba(255, 255, 255, 0) 7px);
+  opacity: 0.85;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+.valora-gold-button::after {
+  content: "";
+  position: absolute;
+  left: -22%;
+  top: -160%;
+  width: 54%;
+  height: 420%;
+  transform: rotate(22deg);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0) 18%,
+    rgba(255, 255, 255, 0.28) 50%,
+    rgba(255, 255, 255, 0) 82%
+  );
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.valora-gold-button:hover {
+  filter: brightness(1.05) saturate(1.08);
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 248, 224, 0.72),
+    inset 0 -2px 0 rgba(78, 55, 11, 0.44),
+    inset 1px 0 0 rgba(255, 241, 193, 0.25),
+    inset -1px 0 0 rgba(102, 72, 14, 0.3),
+    0 3px 0 rgba(82, 57, 10, 0.62),
+    0 14px 22px rgba(93, 66, 10, 0.34);
+}
+
+.valora-gold-button:hover::after {
+  opacity: 1;
+  animation: valoraLiquidShine 2.2s ease-in-out infinite;
+}
+
+.valora-gold-button:active {
+  transform: translateY(1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 248, 224, 0.5),
+    inset 0 -1px 0 rgba(78, 55, 11, 0.35),
+    0 1px 0 rgba(82, 57, 10, 0.5),
+    0 6px 10px rgba(93, 66, 10, 0.22);
+}
+
+.valora-gold-button:disabled {
+  opacity: 0.7;
+}
+
+.valora-gold-menu {
+  border-radius: 14px;
+  border: 1px solid rgba(122, 94, 38, 0.42);
+  background:
+    linear-gradient(150deg, rgba(255, 240, 180, 0.26), rgba(255, 255, 255, 0) 42%),
+    repeating-linear-gradient(
+      110deg,
+      rgba(255, 255, 255, 0.08) 0px,
+      rgba(255, 255, 255, 0.08) 2px,
+      rgba(0, 0, 0, 0.03) 2px,
+      rgba(0, 0, 0, 0.03) 4px
+    ),
+    linear-gradient(135deg, #8a6e2f, #f9e498, #8a6e2f);
+  color: #2e220b;
+  text-shadow: 0 1px 0 rgba(255, 244, 212, 0.38);
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 248, 221, 0.45),
+    inset 0 -1px 0 rgba(91, 63, 14, 0.3),
+    0 5px 11px rgba(93, 66, 10, 0.15);
+}
+
+.valora-gold-menu:hover {
+  border-color: rgba(138, 110, 47, 0.6);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 247, 220, 0.45),
+    inset 0 -1px 0 rgba(91, 63, 14, 0.33),
+    0 8px 16px rgba(93, 66, 10, 0.25);
+}
+
+.valora-gold-menu::before,
+.valora-gold-menu-active::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(circle at 14% 26%, rgba(255, 255, 255, 0.34) 0 2px, rgba(255, 255, 255, 0) 8px),
+    radial-gradient(circle at 29% 70%, rgba(255, 255, 255, 0.28) 0 1.8px, rgba(255, 255, 255, 0) 8px),
+    radial-gradient(circle at 47% 42%, rgba(255, 255, 255, 0.31) 0 2.2px, rgba(255, 255, 255, 0) 9px),
+    radial-gradient(circle at 62% 74%, rgba(255, 255, 255, 0.29) 0 1.9px, rgba(255, 255, 255, 0) 8px),
+    radial-gradient(circle at 78% 36%, rgba(255, 255, 255, 0.3) 0 2px, rgba(255, 255, 255, 0) 8px),
+    radial-gradient(circle at 90% 66%, rgba(255, 255, 255, 0.26) 0 1.6px, rgba(255, 255, 255, 0) 7px);
+  opacity: 0;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  transition: opacity 0.25s ease;
+}
+
+.valora-gold-menu::after,
+.valora-gold-menu-active::after {
+  content: "";
+  position: absolute;
+  left: -26%;
+  top: -165%;
+  width: 50%;
+  height: 430%;
+  transform: rotate(21deg);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0) 18%,
+    rgba(255, 255, 255, 0.26) 50%,
+    rgba(255, 255, 255, 0) 82%
+  );
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.valora-gold-menu:hover::before {
+  opacity: 0.9;
+}
+
+.valora-gold-menu:hover::after {
+  opacity: 0.95;
+  animation: valoraLiquidShine 2.4s ease-in-out infinite;
+}
+
+.valora-gold-menu-active {
+  border-color: rgba(138, 110, 47, 0.8);
+  background:
+    linear-gradient(150deg, rgba(255, 244, 198, 0.35), rgba(255, 255, 255, 0) 42%),
+    repeating-linear-gradient(
+      110deg,
+      rgba(255, 255, 255, 0.1) 0px,
+      rgba(255, 255, 255, 0.1) 2px,
+      rgba(0, 0, 0, 0.04) 2px,
+      rgba(0, 0, 0, 0.04) 4px
+    ),
+    linear-gradient(135deg, #8a6e2f, #f9e498, #8a6e2f);
+  color: #fffdf7;
+  text-shadow: 0 1px 1px rgba(64, 47, 10, 0.65);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 247, 220, 0.58),
+    inset 0 -2px 0 rgba(71, 51, 10, 0.3),
+    0 10px 18px rgba(93, 66, 10, 0.3);
+  position: relative;
+  overflow: hidden;
+}
+
+.valora-gold-menu-active::before {
+  opacity: 0.82;
+}
+
+.valora-gold-menu-active::after {
+  opacity: 0.72;
+  animation: valoraLiquidShine 2.8s ease-in-out infinite;
+}
+
+@keyframes valoraLiquidShine {
+  0% {
+    transform: translateX(-110%) rotate(22deg);
+  }
+  55% {
+    transform: translateX(280%) rotate(22deg);
+  }
+  100% {
+    transform: translateX(280%) rotate(22deg);
+  }
+}
+
+.valora-metal-card {
+  border: 1px solid rgba(138, 110, 47, 0.35);
+  background:
+    linear-gradient(150deg, rgba(255, 244, 198, 0.28), rgba(255, 255, 255, 0) 42%),
+    linear-gradient(135deg, rgba(138, 110, 47, 0.13), rgba(249, 228, 152, 0.22));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 247, 220, 0.5),
+    inset 0 -1px 0 rgba(71, 51, 10, 0.18);
+}
+
+.valora-metal-switch {
+  position: relative;
+  display: inline-flex;
+  min-width: 122px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.45rem;
+  border-radius: 9999px;
+  border: 1px solid rgba(138, 110, 47, 0.5);
+  padding: 0.2rem 0.55rem;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  background:
+    linear-gradient(150deg, rgba(255, 244, 198, 0.3), rgba(255, 255, 255, 0) 45%),
+    linear-gradient(135deg, #8a6e2f, #f9e498, #8a6e2f);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 247, 220, 0.55),
+    inset 0 -1px 0 rgba(71, 51, 10, 0.25),
+    0 3px 8px rgba(93, 66, 10, 0.2);
+  overflow: hidden;
+}
+
+.valora-metal-switch-knob {
+  height: 18px;
+  width: 18px;
+  border-radius: 9999px;
+  border: 1px solid rgba(74, 53, 12, 0.35);
+  background: linear-gradient(145deg, #fff7e0, #d6b15a);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 1px 2px rgba(39, 28, 7, 0.28);
+}
+
+.valora-metal-switch-label {
+  color: #36270b;
+  text-shadow: 0 1px 0 rgba(255, 248, 226, 0.45);
+  transition: color 0.25s ease, text-shadow 0.25s ease;
+}
+
+.valora-metal-switch--paid {
+  box-shadow:
+    inset 0 0 12px rgba(163, 245, 168, 0.6),
+    inset 0 1px 0 rgba(255, 247, 220, 0.55),
+    inset 0 -1px 0 rgba(71, 51, 10, 0.25),
+    0 3px 8px rgba(93, 66, 10, 0.2);
+}
+
+.valora-metal-switch--paid .valora-metal-switch-knob {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 0 10px rgba(34, 197, 94, 0.55),
+    0 1px 2px rgba(39, 28, 7, 0.28);
+}
+
+.valora-metal-switch--paid .valora-metal-switch-label {
+  color: #166534;
+  text-shadow:
+    0 0 8px rgba(34, 197, 94, 0.45),
+    0 1px 0 rgba(236, 253, 245, 0.8);
+}
+
+.valora-metal-switch--pending {
+  box-shadow:
+    inset 0 0 12px rgba(248, 113, 113, 0.32),
+    inset 0 1px 0 rgba(255, 247, 220, 0.55),
+    inset 0 -1px 0 rgba(71, 51, 10, 0.25),
+    0 3px 8px rgba(93, 66, 10, 0.2);
+}
+
+.valora-metal-switch--pending .valora-metal-switch-knob {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 0 8px rgba(248, 113, 113, 0.38),
+    0 1px 2px rgba(39, 28, 7, 0.28);
+}
+
+.valora-metal-switch--pending .valora-metal-switch-label {
+  color: #b91c1c;
+  text-shadow:
+    0 0 7px rgba(248, 113, 113, 0.35),
+    0 1px 0 rgba(254, 242, 242, 0.85);
+}
+
+.valora-metal-switch--planned {
+  box-shadow:
+    inset 0 0 12px rgba(163, 223, 245, 0.62),
+    inset 0 1px 0 rgba(255, 247, 220, 0.55),
+    inset 0 -1px 0 rgba(71, 51, 10, 0.25),
+    0 3px 8px rgba(93, 66, 10, 0.2);
+}
+
+.valora-metal-switch--planned .valora-metal-switch-knob {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 0 9px rgba(59, 130, 246, 0.45),
+    0 1px 2px rgba(39, 28, 7, 0.28);
+}
+
+.valora-metal-switch--planned .valora-metal-switch-label {
+  color: #1d4ed8;
+  text-shadow:
+    0 0 8px rgba(59, 130, 246, 0.4),
+    0 1px 0 rgba(239, 246, 255, 0.82);
+}

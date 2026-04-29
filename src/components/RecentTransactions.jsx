@@ -34,7 +34,14 @@ function PayerChip({ label, initial, tone, compact }) {
   )
 }
 
-function RecentTransactions({ transactions = [], payerMeta }) {
+function RecentTransactions({
+  transactions = [],
+  payerMeta,
+  title = "Lançamentos recentes",
+  description: cardDescription = "Últimas movimentações registradas no período.",
+  emptyTitle = "Nenhum dado encontrado",
+  emptyDescription = "Cadastre lançamentos para ver as movimentações recentes.",
+}) {
   const normalizedTransactions = transactions.map((transaction) => {
     const type = (transaction.tipo ?? transaction.type ?? "").toString().toLowerCase()
     const description =
@@ -52,25 +59,32 @@ function RecentTransactions({ transactions = [], payerMeta }) {
       value: Number(transaction.valor ?? transaction.value ?? 0),
       isIncome: type === "receita" || type === "income",
       chip,
+      isVencida: Boolean(transaction.isVencida),
     }
   })
 
   return (
-    <SectionCard title="Lançamentos Recentes" description="Ultimas movimentacoes registradas no periodo.">
+    <SectionCard title={title} description={cardDescription}>
       <div className="space-y-3">
         {normalizedTransactions.length === 0 ? (
-          <EmptyState
-            title="Nenhum dado encontrado"
-            description="Cadastre lancamentos para ver as movimentacoes recentes."
-          />
+          <EmptyState title={emptyTitle} description={emptyDescription} />
         ) : (
           normalizedTransactions.map((transaction) => (
             <article
               key={transaction.id}
-              className="flex flex-col gap-2 rounded-xl border border-slate-200 p-3 sm:flex-row sm:items-center sm:justify-between"
+              className={`flex flex-col gap-2 rounded-xl border p-3 sm:flex-row sm:items-center sm:justify-between ${
+                transaction.isVencida
+                  ? "border-rose-300 bg-rose-50/60 ring-1 ring-rose-200/80"
+                  : "border-slate-200"
+              }`}
             >
               <div className="min-w-0 flex-1">
-                <div className="flex items-start gap-2">
+                <div className="flex flex-wrap items-start gap-2">
+                  {transaction.isVencida ? (
+                    <span className="shrink-0 rounded-md border border-rose-500 bg-rose-100 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-rose-800">
+                      Vencida
+                    </span>
+                  ) : null}
                   {transaction.chip ? (
                     <PayerChip
                       label={transaction.chip.label}
@@ -81,7 +95,7 @@ function RecentTransactions({ transactions = [], payerMeta }) {
                   ) : null}
                   <p className="min-w-0 flex-1 text-sm font-semibold text-slate-900">{transaction.description}</p>
                 </div>
-                <p className="mt-1 pl-0 text-xs text-slate-500 sm:pl-9">
+                <p className="mt-1 text-xs text-slate-500">
                   {transaction.date} • {transaction.category}
                 </p>
               </div>

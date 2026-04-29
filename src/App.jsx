@@ -2,13 +2,14 @@ import { useEffect, useState } from "react"
 import UpgradeModal from "./components/UpgradeModal"
 import useSubscription from "./hooks/useSubscription"
 import MainLayout from "./layouts/MainLayout"
-import Dashboard from "./pages/Dashboard"
 import Cartoes from "./pages/Cartoes"
+import Carteiras from "./pages/Carteiras"
 import Configuracoes from "./pages/Configuracoes"
 import Grupos from "./pages/Grupos"
 import IAFinanceira from "./pages/IAFinanceira"
 import DividasMacro from "./pages/DividasMacro"
 import Lancamentos from "./pages/Lancamentos"
+import LancamentosReceitas from "./pages/LancamentosReceitas"
 import Login from "./pages/Login"
 import Metas from "./pages/Metas"
 import Relatorios from "./pages/Relatorios"
@@ -16,10 +17,11 @@ import { getCurrentUser, signIn, signOut, signUp } from "./services/authService"
 import { createCheckoutSession } from "./services/stripeService"
 
 const pageComponents = {
-  Dashboard,
-  Lançamentos: Lancamentos,
-  "Dívidas macro": DividasMacro,
+  "Lançamentos de Despesas": Lancamentos,
+  "Lançamentos de Receitas": LancamentosReceitas,
+  "Dívidas Pendentes": DividasMacro,
   Cartões: Cartoes,
+  Carteiras,
   Metas,
   Relatórios: Relatorios,
   "IA Financeira": IAFinanceira,
@@ -106,7 +108,7 @@ function App() {
       {({ activePage }) => {
         const isAdminBypass = user?.email?.toLowerCase() === adminBypassEmail
         const isLocked = premiumPages.has(activePage) && !isPremium && !isSubscriptionLoading && !isAdminBypass
-        const ActivePageComponent = pageComponents[activePage] ?? Dashboard
+        const ActivePageComponent = pageComponents[activePage] ?? Lancamentos
         return (
           <>
             {isLocked ? (

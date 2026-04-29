@@ -1,0 +1,44 @@
+DEBUG SUPABASE SCHEMA CHECK
+Generated: 2026-04-28
+
+1) Tabela public.cartoes (sql/cartoes.sql)
+- id
+- user_id
+- nome
+- bandeira
+- limite_total
+- dia_vencimento
+- dia_fechamento
+- criado_em
+
+2) Tabela public.dividas_macro (sql/dividas_macro.sql)
+- id
+- user_id
+- credor
+- valor_total_original
+- valor_restante
+- status
+- criado_em
+
+3) Colunas usadas no código após ajuste (src/services/cartoesService.js)
+- SELECT cartoes: *
+- FILTER: user_id
+- ORDER: criado_em DESC (com fallback sem order se coluna indisponível)
+- INSERT cartoes:
+  - user_id
+  - nome
+  - bandeira
+  - cor_card (opcional; se coluna não existir, remove e tenta novamente)
+  - limite_total
+  - dia_vencimento
+  - dia_fechamento
+
+4) Verificação de segurança (auth)
+- cartoesService captura user via supabase.auth.getUser()
+- Se user_id ausente: throw "Usuario nao autenticado."
+- user_id sempre incluído no payload de insert
+
+5) Suspeitas clássicas para erro 400
+- ORDER por coluna inexistente (criado_em)
+- INSERT com coluna inexistente (ex.: cor_card, nome_cartao)
+- Falha de RLS por user_id ausente
