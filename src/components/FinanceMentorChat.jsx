@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import OpenAI from "openai"
+import ReactMarkdown from "react-markdown"
 
 const openai = new OpenAI({
   apiKey: import.meta.env.VITE_OPENAI_API_KEY,
@@ -57,87 +58,16 @@ TENDÊNCIA MESES SUBSEQUENTES: ${futureContext}
 
 Sua missão: Analise os lançamentos para identificar onde o usuário está gastando mais, alerte com urgência sobre contas vencidas, sugira cortes se o saldo estiver negativo e ajude a estruturar um planejamento para o mês subsequente.
 Quando o usuário perguntar sobre prioridades de pagamento com dinheiro em carteira, use obrigatoriamente o total disponível em carteiras e a lista de carteiras acima para recomendar uma ordem prática, priorizando contas vencidas e próximas do vencimento sem ultrapassar o saldo disponível.
-Responda em português, com seções curtas e objetivas, usando markdown simples (títulos curtos, listas e negrito quando fizer sentido).`
-  }
-
-  function renderSimpleMarkdown(text) {
-    const lines = String(text ?? "").split("\n")
-    const blocks = []
-    let listItems = []
-    let paragraph = []
-
-    function flushList() {
-      if (listItems.length === 0) return
-      blocks.push({ type: "list", items: listItems })
-      listItems = []
-    }
-    function flushParagraph() {
-      if (paragraph.length === 0) return
-      blocks.push({ type: "paragraph", text: paragraph.join("\n") })
-      paragraph = []
-    }
-
-    for (const raw of lines) {
-      const line = raw.trimEnd()
-      if (!line.trim()) {
-        flushList()
-        flushParagraph()
-        continue
-      }
-      if (line.startsWith("### ")) {
-        flushList()
-        flushParagraph()
-        blocks.push({ type: "h3", text: line.replace(/^###\s+/, "") })
-        continue
-      }
-      if (line.startsWith("- ")) {
-        flushParagraph()
-        listItems.push(line.replace(/^-+\s*/, ""))
-        continue
-      }
-      flushList()
-      paragraph.push(line)
-    }
-    flushList()
-    flushParagraph()
-
-    function renderInlineBold(value) {
-      const parts = String(value).split(/(\*\*[^*]+\*\*)/g)
-      return parts.map((part, idx) => {
-        if (/^\*\*[^*]+\*\*$/.test(part)) {
-          return <strong key={idx}>{part.slice(2, -2)}</strong>
-        }
-        return <span key={idx}>{part}</span>
-      })
-    }
-
-    return (
-      <div className="space-y-2.5 whitespace-pre-wrap break-words">
-        {blocks.map((block, idx) => {
-          if (block.type === "h3") {
-            return (
-              <h3 key={idx} className="text-sm font-semibold text-slate-900">
-                {renderInlineBold(block.text)}
-              </h3>
-            )
-          }
-          if (block.type === "list") {
-            return (
-              <ul key={idx} className="list-disc space-y-1 pl-4">
-                {block.items.map((item, itemIdx) => (
-                  <li key={`${idx}-${itemIdx}`}>{renderInlineBold(item)}</li>
-                ))}
-              </ul>
-            )
-          }
-          return (
-            <p key={idx} className="leading-relaxed">
-              {renderInlineBold(block.text)}
-            </p>
-          )
-        })}
-      </div>
-    )
+Responda em português usando Markdown limpo e legível. Regras obrigatórias de formatação:
+- Use títulos com "##".
+- Use listas numeradas quando recomendar sequência de ações.
+- Evite parágrafos longos; prefira blocos curtos.
+- Estruture a resposta SEMPRE nestes blocos:
+  1. Situação atual
+  2. Prioridade de pagamento
+  3. O que pagar agora
+  4. O que esperar
+  5. Alerta final`
   }
 
   async function send() {
@@ -192,19 +122,36 @@ Responda em português, com seções curtas e objetivas, usando markdown simples
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <h2 className="text-base font-semibold text-slate-900">Mentor financeiro (chat)</h2>
 
-      <div className="mt-4 h-[340px] space-y-3 overflow-y-auto rounded-xl border border-slate-100 bg-slate-50 p-3">
+      <div className="mt-4 space-y-3 rounded-xl border border-slate-100 bg-slate-50 p-3 sm:p-4">
         {messages.map((msg, i) => (
           <div
             key={i}
-            className={`max-w-[92%] rounded-xl px-3 py-2 text-sm leading-relaxed ${
+            className={`w-full rounded-xl px-4 py-4 text-sm leading-relaxed ${
               msg.role === "user"
-                ? "ml-4 border border-slate-200 bg-white text-slate-900"
+                ? "border border-slate-200 bg-white text-slate-900 sm:ml-auto sm:max-w-[88%]"
                 : msg.kind === "error"
-                  ? "mr-4 border border-rose-200 bg-rose-50 text-rose-700 shadow-sm"
-                  : "mr-4 border border-slate-100 bg-white text-slate-800 shadow-sm"
+                  ? "border border-rose-200 bg-rose-50 text-rose-700 shadow-sm sm:mr-auto sm:max-w-[88%]"
+                  : "border border-slate-100 bg-white text-slate-800 shadow-sm sm:mr-auto sm:max-w-[88%]"
             }`}
           >
-            {msg.role === "assistant" && msg.kind !== "error" ? renderSimpleMarkdown(msg.text) : msg.text}
+            {msg.role === "assistant" && msg.kind !== "error" ? (
+              <ReactMarkdown
+                components={{
+                  h1: ({ children }) => <h1 className="mb-3 text-xl font-bold text-slate-900">{children}</h1>,
+                  h2: ({ children }) => <h2 className="mb-2 mt-4 text-lg font-bold text-slate-900">{children}</h2>,
+                  h3: ({ children }) => <h3 className="mb-2 mt-4 text-base font-bold text-slate-900">{children}</h3>,
+                  p: ({ children }) => <p className="mb-3 leading-relaxed text-slate-700">{children}</p>,
+                  strong: ({ children }) => <strong className="font-bold text-slate-900">{children}</strong>,
+                  ul: ({ children }) => <ul className="mb-3 list-disc space-y-1 pl-5">{children}</ul>,
+                  ol: ({ children }) => <ol className="mb-3 list-decimal space-y-1 pl-5">{children}</ol>,
+                  li: ({ children }) => <li className="leading-relaxed text-slate-700">{children}</li>,
+                }}
+              >
+                {msg.content || msg.text || ""}
+              </ReactMarkdown>
+            ) : (
+              msg.text
+            )}
           </div>
         ))}
         {loading ? <p className="text-sm text-slate-500">Pensando...</p> : null}
