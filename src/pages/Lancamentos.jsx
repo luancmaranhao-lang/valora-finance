@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import AnnualSummaryModal from "../components/AnnualSummaryModal"
+import CarryOverBanner from "../components/CarryOverBanner"
 import EmptyState from "../components/EmptyState"
 import {
   atualizarLancamento,
@@ -8,8 +9,24 @@ import {
   removerLancamento,
 } from "../services/lancamentosService"
 import { listarCartoes } from "../services/cartoesService"
-import { CATEGORY_DRILLDOWN_KEY } from "../constants/navigationEvents"
+import { CATEGORY_DRILLDOWN_KEY, GOTO_PAGE_EVENT } from "../constants/navigationEvents"
 import { supabase } from "../services/supabaseClient"
+import { listWallets, WALLETS_UPDATED_EVENT } from "../services/walletsService"
+import {
+  getYearMonthKeyFromParts,
+  mergeGastosEsporadicosToPlanningItems,
+  planningRowKey,
+  sumPendingProvision,
+  VARIABLE_PLANNING_UPDATED_EVENT,
+} from "../utils/variablePlanningStore"
+import {
+  atualizarGastoEsporadico,
+  excluirGastoEsporadico,
+  inserirGastoEsporadico,
+  listarGastosEsporadicosPorCompetencia,
+} from "../services/gastosEsporadicosService"
+import { metasService } from "../services/metasService"
+import { getWeekendsInMonth, valorPorSexta } from "../utils/weekendMonthUtils"
 import {
   dividedPayerValue,
   extractTagValue,
@@ -35,7 +52,6 @@ const PAYMENT_METHOD_OPTIONS = [
   "Transferência",
   "Outro",
 ]
-
 const categoryOptions = [
   "💼 Trabalho",
   "⚖️ Jurídico",
@@ -125,6 +141,47 @@ function parseMoneyInput(value) {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
+function formatMoneyInput(value) {
+  const amount = Number(value ?? 0)
+  if (!Number.isFinite(amount)) return "0,00"
+  return amount.toFixed(2).replace(".", ",")
+}
+
+/** Parte inteira com pelo menos 2 dígitos (ex.: 00,00) para campos de provisão. */
+function formatProvisionMoneyDisplay(value) {
+  const s = formatMoneyInput(value)
+  const [intRaw, decRaw] = s.split(",")
+  const dec = (decRaw ?? "00").slice(0, 2).padEnd(2, "0")
+  const intPart = intRaw ?? "0"
+  const intNum = intPart.replace(/\D/g, "") === "" ? 0 : parseInt(intPart, 10)
+  const intStr = Number.isFinite(intNum) ? String(intNum) : "0"
+  const paddedInt = intStr.length < 2 ? intStr.padStart(2, "0") : intStr
+  return `${paddedInt},${dec}`
+}
+
+function roundMoney2(value) {
+  const n = Number(value ?? 0)
+  if (!Number.isFinite(n)) return 0
+  return Math.round((n + Number.EPSILON) * 100) / 100
+}
+
+function provisionValorDigitsFromRaw(raw) {
+  return String(raw ?? "").replace(/\D/g, "").slice(0, 12)
+}
+
+/** Digitação cent-first: apenas dígitos, interpretados como centavos (ex.: 1→0,01; 1000→10,00). */
+function formatProvisionValorDraftFromRaw(raw) {
+  const digits = provisionValorDigitsFromRaw(raw)
+  if (!digits) return formatProvisionMoneyDisplay(0)
+  const cents = parseInt(digits, 10)
+  if (!Number.isFinite(cents)) return formatProvisionMoneyDisplay(0)
+  return formatProvisionMoneyDisplay(cents / 100)
+}
+
+function getYearMonthKey(viewYM) {
+  return getYearMonthKeyFromParts(viewYM.y, viewYM.m)
+}
+
 function normalizeMoneyDraft(value) {
   return String(value ?? "")
     .replace(/[^\d,.\s]/g, "")
@@ -154,6 +211,14 @@ function buildDescriptionWithMeta(baseDescription, { payer, splitMethod, isDivid
   return parts.join(" ").trim()
 }
 
+/** Remove o sufixo técnico da descrição na lista (mantém só o nome, ex. «Medicamento»). */
+function cleanProvisionAgendaDisplay(description) {
+  const base = String(description ?? "").trim()
+  const marker = " [provisao_agenda:"
+  const i = base.indexOf(marker)
+  return i >= 0 ? base.slice(0, i).trim() : base
+}
+
 function mapDbToUi(record) {
   const visibilityRaw = record.visibilidade ?? record.visibility ?? "privado"
   const splitMethodRaw = record.metodo_divisao ?? record.split_method ?? record.splitMethod ?? null
@@ -168,6 +233,7 @@ function mapDbToUi(record) {
 
   return {
     id: record.id,
+    projectedTemplateId: record._projectedTemplateId ?? null,
     type: typeRaw === "receita" ? "Receita" : "Despesa",
     recurrenceType:
       recurrenceRaw === "recorrente_fixa"
@@ -177,7 +243,7 @@ function mapDbToUi(record) {
           : recurrenceRaw === "parcelado"
             ? "Parcelado"
           : "Única",
-    description: removeLancamentoMetaTags(rawDescription),
+    description: cleanProvisionAgendaDisplay(removeLancamentoMetaTags(rawDescription)),
     category: record.categoria ?? record.category ?? "",
     value: Number(record.valor ?? record.value ?? 0),
     date: normalizeUiDate(record.data ?? record.date),
@@ -222,6 +288,22 @@ function isDateInMonth(isoDate, year, monthIndex) {
   return date.getFullYear() === year && date.getMonth() === monthIndex
 }
 
+/** Soma dos valores em `datasUsoPlanejadas` com data no mês visível (provisões pendentes). */
+function sumProvisionAgendadoNoMes(items, year, monthIndex) {
+  let s = 0
+  for (const item of items ?? []) {
+    if (item.status !== "pendente") continue
+    for (const row of item.datasUsoPlanejadas ?? []) {
+      const iso = String(row?.data ?? "").slice(0, 10)
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) continue
+      if (!isDateInMonth(iso, year, monthIndex)) continue
+      const v = Number(row?.valor ?? 0)
+      if (Number.isFinite(v) && v > 0) s += v
+    }
+  }
+  return roundMoney2(s)
+}
+
 function resolvePaymentSignal(transaction) {
   const isPaid = transaction.paymentStatus === "Pago"
   if (isPaid) {
@@ -236,6 +318,17 @@ function resolvePaymentSignal(transaction) {
   }
 
   return { label: "Previsto", tone: "planned", isRight: false }
+}
+
+function isProvisionAgendaProjection(transaction) {
+  return Boolean(transaction?.isProjected && String(transaction?.id ?? "").startsWith("prov-ag-"))
+}
+
+/** Linhas reais ou fantasma de recorrência (com modelo no Supabase) — permitem alternar pagamento e editar. */
+function isLancamentoControleNaLista(transaction) {
+  if (!transaction?.isProjected) return true
+  if (isProvisionAgendaProjection(transaction)) return false
+  return Boolean(transaction.projectedTemplateId)
 }
 
 function buildRecurringKeyRaw(item) {
@@ -303,6 +396,7 @@ function buildProjectedRawRows(allRaw, year, monthIndex, now = new Date()) {
 
     projected.push({
       ...template,
+      _projectedTemplateId: template.id,
       id: safeId,
       data: dataIso,
       status: "pendente",
@@ -312,6 +406,48 @@ function buildProjectedRawRows(allRaw, year, monthIndex, now = new Date()) {
   })
 
   return projected
+}
+
+/** Linhas “fantasma” na lista de despesas a partir de datas/valores agendados na provisão. */
+function buildProvisionScheduledRawRows(items, year, monthIndex, competenciaKey) {
+  const out = []
+  for (const item of items ?? []) {
+    if (item.status === "precisou") continue
+    const slots = item.datasUsoPlanejadas ?? []
+    if (!slots.length) continue
+    const label = String(item.displayLabel || item.descricao || "Provisão").trim()
+    const idPart = item.id ?? item.codigo ?? "tmp"
+    slots.forEach((slot, idx) => {
+      const iso = String(slot?.data ?? "").slice(0, 10)
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(iso) || !isDateInMonth(iso, year, monthIndex)) return
+      const v = Math.abs(Number(slot?.valor ?? 0))
+      if (!Number.isFinite(v) || v <= 0) return
+      out.push({
+        id: `prov-ag-${idPart}-${idx}-${iso}`,
+        tipo: "despesa",
+        descricao: `${label} [provisao_agenda:${competenciaKey}:${idPart}:${idx}]`,
+        categoria: "🍿 Lazer",
+        valor: v,
+        data: iso,
+        status: "pendente",
+        forma_pagamento: "PIX",
+        recorrencia: "unica",
+        visibilidade: "privado",
+        _projected: true,
+      })
+    })
+  }
+  return out
+}
+
+/** Mesma linha de provisão na UI (id, clientUid antes de gravar ou codigo nativo sem id). */
+function samePlanningItem(row, ref) {
+  if (!row || !ref) return false
+  if (ref.id != null && ref.id !== "") return String(row.id ?? "") === String(ref.id)
+  if (ref.clientUid) return row.clientUid === ref.clientUid
+  if (ref.codigo != null && ref.codigo !== "" && (ref.id == null || ref.id === ""))
+    return String(row.codigo ?? "") === String(ref.codigo) && (row.id == null || row.id === "")
+  return planningRowKey(row) === planningRowKey(ref)
 }
 
 function Lancamentos() {
@@ -335,7 +471,28 @@ function Lancamentos() {
   const [creditCards, setCreditCards] = useState([])
   const [categoryDrilldown, setCategoryDrilldown] = useState("")
   const [listOptionsOpen, setListOptionsOpen] = useState(false)
+  const [wallets, setWallets] = useState(() => listWallets())
+  const [selectedWalletId, setSelectedWalletId] = useState("")
+  const [variablePlanningItems, setVariablePlanningItems] = useState([])
+  const [variablePlanningAccordionOpen, setVariablePlanningAccordionOpen] = useState(false)
+  const [moneyDraftByKey, setMoneyDraftByKey] = useState({})
+  /** `rk|idx` → texto cent-first enquanto edita valor de uma linha de agendamento. */
+  const [agendaMoneyDraftByCell, setAgendaMoneyDraftByCell] = useState({})
+  /** `rk -> true` enquanto o utilizador desbloqueou o valor para editar (linhas já persistidas com `id`). */
+  const [provisionValorDesbloqueado, setProvisionValorDesbloqueado] = useState({})
+  const [metaSaldoNome, setMetaSaldoNome] = useState("Saldo")
+  const [metaSugestaoDispensada, setMetaSugestaoDispensada] = useState(false)
+  const variablePlanningItemsRef = useRef([])
+  const provisionValorDesbloqueadoRef = useRef({})
   const valueInputRef = useRef(null)
+
+  useEffect(() => {
+    variablePlanningItemsRef.current = variablePlanningItems
+  }, [variablePlanningItems])
+
+  useEffect(() => {
+    provisionValorDesbloqueadoRef.current = provisionValorDesbloqueado
+  }, [provisionValorDesbloqueado])
 
   const transactions = useMemo(() => rawTransactions.map(mapDbToUi), [rawTransactions])
 
@@ -351,16 +508,31 @@ function Lancamentos() {
 
   const monthScopedRows = useMemo(() => {
     const { y, m } = viewYM
+    const planKey = getYearMonthKeyFromParts(y, m)
     const inMonthReal = transactions.filter((row) => isDateInMonth(row.date, y, m))
     const projectedRaw = buildProjectedRawRows(rawTransactions, y, m)
-    const projectedUi = projectedRaw.map(mapDbToUi)
+    const projectedProvisionRaw = buildProvisionScheduledRawRows(variablePlanningItems, y, m, planKey)
+    const projectedUi = [...projectedRaw, ...projectedProvisionRaw].map(mapDbToUi)
     const merged = [...projectedUi, ...inMonthReal].sort((a, b) => {
       const da = parseUiDate(a.date)?.getTime() ?? 0
       const db = parseUiDate(b.date)?.getTime() ?? 0
       return da - db
     })
     return merged
-  }, [transactions, rawTransactions, viewYM])
+  }, [transactions, rawTransactions, viewYM, variablePlanningItems])
+
+  const viewMonthPlanKey = useMemo(() => getYearMonthKey(viewYM), [viewYM])
+
+  const carryMonthKeysLan = useMemo(() => {
+    const { y, m } = viewYM
+    const prev = new Date(y, m - 1, 1)
+    return {
+      mesAtual: getYearMonthKeyFromParts(y, m),
+      mesAnterior: getYearMonthKeyFromParts(prev.getFullYear(), prev.getMonth()),
+    }
+  }, [viewYM])
+
+  const [carryRefreshKey, setCarryRefreshKey] = useState(0)
 
   const isDivided = formData.payer === dividedPayerValue
   const isRecurring = formData.recurrenceType === "Recorrente Fixa" || formData.recurrenceType === "Recorrente Variável"
@@ -385,6 +557,84 @@ function Lancamentos() {
     }, 0)
 
     return () => clearTimeout(timer)
+  }, [])
+
+  useEffect(() => {
+    function syncWallets() {
+      setWallets(listWallets())
+    }
+    window.addEventListener(WALLETS_UPDATED_EVENT, syncWallets)
+    window.addEventListener("storage", syncWallets)
+    return () => {
+      window.removeEventListener(WALLETS_UPDATED_EVENT, syncWallets)
+      window.removeEventListener("storage", syncWallets)
+    }
+  }, [])
+
+  useEffect(() => {
+    const selfWallets = listWallets()
+    setWallets(selfWallets)
+    setSelectedWalletId((prev) => {
+      if (prev && selfWallets.some((wallet) => String(wallet.id) === String(prev))) return prev
+      return selfWallets[0]?.id != null ? String(selfWallets[0].id) : ""
+    })
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadProvisoes() {
+      try {
+        const rows = await listarGastosEsporadicosPorCompetencia(viewMonthPlanKey)
+        if (cancelled) return
+        setVariablePlanningItems(mergeGastosEsporadicosToPlanningItems(rows, viewYM.y, viewYM.m))
+        setMoneyDraftByKey({})
+      } catch (err) {
+        if (cancelled) return
+        console.error("[Lancamentos] loadProvisoes falhou:", err)
+        const msg =
+          err && typeof err === "object" && "message" in err && err.message
+            ? String(err.message)
+            : err != null
+              ? String(err)
+              : "Erro desconhecido"
+        setVariablePlanningItems(mergeGastosEsporadicosToPlanningItems([], viewYM.y, viewYM.m))
+        setMessageType("error")
+        setMessage(
+          `Não foi possível carregar provisões: ${msg}. Abra o console (F12) para message/details/code. Confirme a tabela gastos_esporadicos (sql/gastos_esporadicos.sql) e o login.`,
+        )
+      }
+    }
+    void loadProvisoes()
+    return () => {
+      cancelled = true
+    }
+  }, [viewMonthPlanKey, viewYM.y, viewYM.m])
+
+  useEffect(() => {
+    setProvisionValorDesbloqueado({})
+    setMetaSugestaoDispensada(false)
+  }, [viewMonthPlanKey])
+
+  useEffect(() => {
+    let cancel = false
+    void metasService
+      .listarMetas()
+      .then((data) => {
+        if (cancel) return
+        const list = data ?? []
+        const saldoMeta = list.find((m) => /saldo/i.test(String(m.nome ?? m.name ?? "")))
+        if (saldoMeta) {
+          setMetaSaldoNome(String(saldoMeta.nome ?? saldoMeta.name ?? "Saldo"))
+          return
+        }
+        if (list[0]) {
+          setMetaSaldoNome(String(list[0].nome ?? list[0].name ?? "Meta"))
+        }
+      })
+      .catch(() => {})
+    return () => {
+      cancel = true
+    }
   }, [])
 
   useEffect(() => {
@@ -565,13 +815,22 @@ function Lancamentos() {
 
   function handleEdit(transaction) {
     if (transaction.isProjected) {
-      setMessageType("error")
-      setMessage("Itens previstos não podem ser editados. Cadastre o lançamento real no mês ou ajuste o modelo em um mês anterior.")
-      return
+      if (String(transaction.id ?? "").startsWith("prov-ag-")) {
+        setMessageType("error")
+        setMessage(
+          "Esta linha vem da agenda da provisão. Ajuste datas e valores no planejamento de despesas variáveis, não aqui.",
+        )
+        return
+      }
+      if (!transaction.projectedTemplateId) {
+        setMessageType("error")
+        setMessage("Item previsto sem modelo vinculado. Recarregue a página ou verifique o lançamento recorrente base.")
+        return
+      }
     }
     setFormExpanded(true)
     const isDefaultCategory = categoryOptions.includes(transaction.category)
-    setEditingId(transaction.id)
+    setEditingId(transaction.isProjected ? null : transaction.id)
     setFormData({
       type: transaction.type,
       recurrenceType: transaction.recurrenceType ?? "Única",
@@ -617,10 +876,50 @@ function Lancamentos() {
     }
   }
 
-  async function handleTogglePaymentStatus(transaction) {
-    if (transaction.isProjected) return
+  async function materializeProjectedRecurringRow(transaction, nextStatusDb) {
+    const templateId = transaction.projectedTemplateId
+    if (!templateId) throw new Error("Modelo não encontrado.")
+    const template = rawTransactions.find((r) => String(r.id) === String(templateId))
+    if (!template) throw new Error("Lançamento base não encontrado.")
 
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser()
+    if (userError || !user?.id) throw new Error("Sessão inválida.")
+
+    const dataIso = normalizeUiDate(transaction.date)
+    const { id: _rid, created_at: _ca, updated_at: _ua, ...templateRest } = template
+    await criarLancamento({
+      ...templateRest,
+      user_id: user.id,
+      data: dataIso,
+      status: nextStatusDb,
+      numero_parcelas: 1,
+    })
+  }
+
+  async function handleTogglePaymentStatus(transaction) {
     const nextStatus = transaction.paymentStatus === "Pago" ? "pendente" : "pago"
+
+    if (transaction.isProjected) {
+      if (String(transaction.id ?? "").startsWith("prov-ag-")) {
+        setMessageType("error")
+        setMessage("Despesas previstas da provisão são geridas no planejamento de variáveis.")
+        return
+      }
+      if (!transaction.projectedTemplateId) return
+      try {
+        await materializeProjectedRecurringRow(transaction, nextStatus)
+        window.dispatchEvent(new Event("lancamentos:updated"))
+        await loadLancamentos()
+      } catch {
+        setMessageType("error")
+        setMessage("Não foi possível gravar o pagamento deste mês. Tente novamente.")
+      }
+      return
+    }
+
     try {
       await atualizarLancamento(transaction.id, { status: nextStatus })
       window.dispatchEvent(new Event("lancamentos:updated"))
@@ -731,6 +1030,356 @@ function Lancamentos() {
     }
   }
 
+  async function refreshPlanningFromDb() {
+    const rows = await listarGastosEsporadicosPorCompetencia(viewMonthPlanKey)
+    setVariablePlanningItems(mergeGastosEsporadicosToPlanningItems(rows, viewYM.y, viewYM.m))
+    window.dispatchEvent(new Event(VARIABLE_PLANNING_UPDATED_EVENT))
+  }
+
+  async function handleCarryOverSuccessLancamentos() {
+    setMessage("")
+    setCarryRefreshKey((k) => k + 1)
+    await refreshPlanningFromDb()
+    await loadLancamentos()
+  }
+
+  function provisionRowDbFields(item) {
+    return {
+      dataAlvo: item?.dataAlvo ?? "",
+      contabilizaNoTotal: true,
+    }
+  }
+
+  function slotsPayloadForItem(item, valorPlanejado) {
+    if (item.codigo !== "final_de_semana") return {}
+    const { weekendLabelCount } = getWeekendsInMonth(viewYM.y, viewYM.m)
+    return {
+      slots_sexta_no_mes: weekendLabelCount,
+      valor_por_slot: valorPorSexta(valorPlanejado, weekendLabelCount),
+    }
+  }
+
+  async function persistValorPlanejado(item, parsedRaw) {
+    if (item.status === "precisou") return false
+    const v = Math.max(0, Number(parsedRaw) || 0)
+    if (!item.id && v === 0) return false
+    const slotsPayload = slotsPayloadForItem(item, v)
+    try {
+      if (item.id) {
+        await atualizarGastoEsporadico(item.id, { valor_planejado: v, ...slotsPayload })
+      } else {
+        await inserirGastoEsporadico({
+          competencia: viewMonthPlanKey,
+          codigo: item.codigo,
+          descricao: item.descricao || item.displayLabel,
+          valor_planejado: v,
+          status: item.status ?? "pendente",
+          lancamento_id: item.lancamentoId,
+          carteira_id: selectedWalletId || null,
+          datasUsoPlanejadas: item.datasUsoPlanejadas ?? [],
+          ...provisionRowDbFields(item),
+          ...slotsPayload,
+        })
+      }
+      await refreshPlanningFromDb()
+      return true
+    } catch (error) {
+      setMessageType("error")
+      setMessage(error?.message || "Não foi possível salvar o valor da provisão.")
+      return false
+    }
+  }
+
+  async function persistDescricaoCustom(rowKey, nextDesc) {
+    const trimmed = String(nextDesc ?? "").trim()
+    if (!trimmed) return
+    const item = variablePlanningItemsRef.current.find((i) => planningRowKey(i) === rowKey)
+    if (!item?.isCustom) return
+    try {
+      if (item.id) {
+        await atualizarGastoEsporadico(item.id, { descricao: trimmed })
+      } else {
+        await inserirGastoEsporadico({
+          competencia: viewMonthPlanKey,
+          codigo: null,
+          descricao: trimmed,
+          valor_planejado: Number(item.plannedValue ?? 0) || 0,
+          status: item.status ?? "pendente",
+          lancamento_id: item.lancamentoId,
+          carteira_id: selectedWalletId || null,
+          datasUsoPlanejadas: item.datasUsoPlanejadas ?? [],
+          ...provisionRowDbFields(item),
+        })
+      }
+      await refreshPlanningFromDb()
+    } catch (error) {
+      setMessageType("error")
+      setMessage(error?.message || "Não foi possível salvar a descrição.")
+    }
+  }
+
+  function agendaDraftCellKey(rk, sid) {
+    return `${rk}::${sid}`
+  }
+
+  function clearAgendaDraftKeysForRow(rk) {
+    setAgendaMoneyDraftByCell((prev) => {
+      const next = { ...prev }
+      const legacy = `${rk}|`
+      const modern = `${rk}::`
+      for (const key of Object.keys(next)) {
+        if (key.startsWith(legacy) || key.startsWith(modern)) delete next[key]
+      }
+      return next
+    })
+  }
+
+  async function persistDatasUsoPlanejadas(item) {
+    const rk = planningRowKey(item)
+    const latest = variablePlanningItemsRef.current.find((i) => samePlanningItem(i, item)) ?? item
+    if (!latest.id) {
+      setMessageType("error")
+      setMessage("Guarde o valor da provisão antes de guardar os agendamentos.")
+      return
+    }
+    const rows = (latest.datasUsoPlanejadas ?? [])
+      .map((r) => ({
+        data: String(r?.data ?? "").slice(0, 10),
+        valor: roundMoney2(Number(r?.valor ?? 0)),
+      }))
+      .filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r.data) && r.valor > 0)
+    const planned = roundMoney2(Number(latest.plannedValue ?? 0))
+    const sum = roundMoney2(rows.reduce((s, r) => s + r.valor, 0))
+    if (sum > planned + 0.001) {
+      setMessageType("error")
+      setMessage("A soma dos valores agendados não pode exceder o valor provisionado.")
+      return
+    }
+    try {
+      await atualizarGastoEsporadico(latest.id, { datasUsoPlanejadas: rows })
+      clearAgendaDraftKeysForRow(rk)
+      await refreshPlanningFromDb()
+      setMessageType("success")
+      setMessage("Agendamentos guardados — aparecem como despesas previstas na lista.")
+    } catch (error) {
+      setMessageType("error")
+      setMessage(error?.message || "Não foi possível guardar os agendamentos.")
+    }
+  }
+
+  function handleAddAgendaRow(item) {
+    const { y, m } = viewYM
+    const defaultData = `${y}-${String(m + 1).padStart(2, "0")}-01`
+    const sid = globalThis.crypto?.randomUUID?.() ?? `ag-tmp-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+    setVariablePlanningItems((prev) =>
+      prev.map((row) => {
+        if (!samePlanningItem(row, item)) return row
+        const arr = [...(row.datasUsoPlanejadas ?? [])]
+        arr.push({ sid, data: defaultData, valor: 0 })
+        return { ...row, datasUsoPlanejadas: arr }
+      }),
+    )
+  }
+
+  async function handleRemoveAgendaRow(item, slotSid) {
+    const rk = planningRowKey(item)
+    const latest = variablePlanningItemsRef.current.find((i) => samePlanningItem(i, item)) ?? item
+    const previousSlots = [...(latest.datasUsoPlanejadas ?? [])]
+    const newSlots = previousSlots.filter((slot) => slot.sid !== slotSid)
+
+    clearAgendaDraftKeysForRow(rk)
+    setAgendaMoneyDraftByCell((prev) => {
+      if (slotSid == null || slotSid === "") return prev
+      const next = { ...prev }
+      delete next[agendaDraftCellKey(rk, slotSid)]
+      return next
+    })
+    setVariablePlanningItems((prev) =>
+      prev.map((row) => {
+        if (!samePlanningItem(row, item)) return row
+        return { ...row, datasUsoPlanejadas: newSlots }
+      }),
+    )
+
+    if (!latest.id) return
+
+    const rows = newSlots
+      .map((r) => ({
+        data: String(r?.data ?? "").slice(0, 10),
+        valor: roundMoney2(Number(r?.valor ?? 0)),
+      }))
+      .filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r.data) && r.valor > 0)
+
+    try {
+      await atualizarGastoEsporadico(latest.id, { datasUsoPlanejadas: rows })
+    } catch (error) {
+      setVariablePlanningItems((prev) =>
+        prev.map((row) =>
+          samePlanningItem(row, item) ? { ...row, datasUsoPlanejadas: previousSlots } : row,
+        ),
+      )
+      setMessageType("error")
+      setMessage(error?.message || "Não foi possível remover a linha de agendamento.")
+    }
+  }
+
+  function handleAgendaRowDataChange(item, sid, isoDate) {
+    setVariablePlanningItems((prev) =>
+      prev.map((row) => {
+        if (!samePlanningItem(row, item)) return row
+        const arr = (row.datasUsoPlanejadas ?? []).map((slot) =>
+          slot.sid === sid ? { ...slot, data: String(isoDate ?? "").slice(0, 10) } : slot,
+        )
+        return { ...row, datasUsoPlanejadas: arr }
+      }),
+    )
+  }
+
+  function handleAgendaValorChange(item, sid, raw) {
+    const rk = planningRowKey(item)
+    const ck = agendaDraftCellKey(rk, sid)
+    const draft = formatProvisionValorDraftFromRaw(raw)
+    const parsed = parseMoneyInput(draft)
+    setAgendaMoneyDraftByCell((prev) => ({ ...prev, [ck]: draft }))
+    setVariablePlanningItems((prev) =>
+      prev.map((row) => {
+        if (!samePlanningItem(row, item)) return row
+        const arr = (row.datasUsoPlanejadas ?? []).map((slot) =>
+          slot.sid === sid ? { ...slot, valor: parsed } : slot,
+        )
+        return { ...row, datasUsoPlanejadas: arr }
+      }),
+    )
+  }
+
+  function handleMoneyDraftChange(item, raw) {
+    if (item.status === "precisou") return
+    const k = planningRowKey(item)
+    const travado =
+      Boolean(item.id && item.status !== "precisou" && provisionValorDesbloqueado[k] !== true)
+    if (travado) return
+    const draft = formatProvisionValorDraftFromRaw(raw)
+    const parsed = parseMoneyInput(draft)
+    setMoneyDraftByKey((prev) => ({ ...prev, [k]: draft }))
+    setVariablePlanningItems((prev) =>
+      prev.map((row) => (planningRowKey(row) === k ? { ...row, plannedValue: parsed } : row)),
+    )
+  }
+
+  async function handleMoneyDraftBlur(item, currentValue) {
+    const k = planningRowKey(item)
+    const latest = variablePlanningItemsRef.current.find((i) => planningRowKey(i) === k) ?? item
+    if (latest.status === "precisou") return false
+    const parsed = parseMoneyInput(currentValue)
+    const salvarAposEditar = provisionValorDesbloqueadoRef.current[k] === true
+    setMoneyDraftByKey((prev) => {
+      const next = { ...prev }
+      delete next[k]
+      return next
+    })
+    // Sem `salvarAposEditar`: se o estado local já batia com o rascunho mas o Supabase estava desatualizado,
+    // saltávamos o PATCH e o valor nunca gravava (ex.: Editar → 100,00 → Salvar com linha já com id).
+    if (
+      roundMoney2(latest.plannedValue) === roundMoney2(parsed) &&
+      latest.id &&
+      !salvarAposEditar
+    ) {
+      const slotsOnly = slotsPayloadForItem(latest, parsed)
+      if (latest.codigo === "final_de_semana" && latest.id) {
+        try {
+          await atualizarGastoEsporadico(latest.id, slotsOnly)
+          await refreshPlanningFromDb()
+        } catch {
+          /* noop */
+        }
+      }
+      setProvisionValorDesbloqueado((prev) => {
+        const next = { ...prev }
+        delete next[k]
+        return next
+      })
+      return true
+    }
+    const ok = await persistValorPlanejado(latest, parsed)
+    if (ok) {
+      setProvisionValorDesbloqueado((prev) => {
+        const next = { ...prev }
+        delete next[k]
+        return next
+      })
+    }
+    return ok
+  }
+
+  function handleAdicionarProvisao() {
+    const clientUid = globalThis.crypto?.randomUUID?.() ?? `tmp-${Date.now()}`
+    setVariablePlanningItems((prev) => [
+      ...prev,
+      {
+        id: null,
+        clientUid,
+        codigo: null,
+        descricao: "",
+        displayLabel: "",
+        plannedValue: 0,
+        status: "pendente",
+        lancamentoId: null,
+        slotsSextaNoMes: null,
+        valorPorSlot: null,
+        isCustom: true,
+        contabilizaNoTotal: true,
+        dataAlvo: "",
+        datasUsoPlanejadas: [],
+      },
+    ])
+  }
+
+  async function handleExcluirProvisao(item) {
+    const rk = planningRowKey(item)
+    if (item.status === "precisou") {
+      window.alert("Não é possível excluir uma provisão já lançada.")
+      return
+    }
+    if (!item.id && item.isCustom) {
+      setVariablePlanningItems((prev) => prev.filter((row) => planningRowKey(row) !== rk))
+      setMoneyDraftByKey((prev) => {
+        const next = { ...prev }
+        delete next[rk]
+        return next
+      })
+      setProvisionValorDesbloqueado((prev) => {
+        const next = { ...prev }
+        delete next[rk]
+        return next
+      })
+      clearAgendaDraftKeysForRow(rk)
+      return
+    }
+    if (!item.id) return
+
+    const prevList = variablePlanningItemsRef.current.slice()
+    setVariablePlanningItems((prev) => prev.filter((row) => planningRowKey(row) !== rk))
+    setMoneyDraftByKey((prev) => {
+      const next = { ...prev }
+      delete next[rk]
+      return next
+    })
+    setProvisionValorDesbloqueado((prev) => {
+      const next = { ...prev }
+      delete next[rk]
+      return next
+    })
+    clearAgendaDraftKeysForRow(rk)
+
+    try {
+      await excluirGastoEsporadico(item.id)
+      await refreshPlanningFromDb()
+    } catch (error) {
+      setVariablePlanningItems(prevList)
+      window.alert(error?.message || "Não foi possível excluir a provisão.")
+    }
+  }
+
   const filteredTransactions = monthScopedRows.filter((item) => {
     if (item.type !== "Despesa") return false
     if (categoryDrilldown && String(item.category) !== categoryDrilldown) {
@@ -779,6 +1428,54 @@ function Lancamentos() {
       pendPct: (pend / sum) * 100,
     }
   }, [footerTotals])
+
+  const variablePlanningTotals = useMemo(() => {
+    const comprometidoPendente = sumPendingProvision(variablePlanningItems)
+    const liberado = variablePlanningItems
+      .filter((item) => item.status === "nao_precisou")
+      .reduce((sum, item) => sum + Number(item.plannedValue ?? 0), 0)
+    return {
+      comprometidoPendente,
+      liberado,
+    }
+  }, [variablePlanningItems])
+
+  const sugestaoMetaValor = useMemo(() => {
+    let total = 0
+    for (const item of variablePlanningItems) {
+      if (item.status === "nao_precisou") {
+        total += Number(item.plannedValue ?? 0) || 0
+      } else if (item.status === "precisou" && item.lancamentoId) {
+        const t = transactions.find((tr) => String(tr.id) === String(item.lancamentoId))
+        if (t) {
+          const gasto = Math.abs(Number(t.value ?? 0))
+          const planej = Number(item.plannedValue ?? 0)
+          total += Math.max(0, planej - gasto)
+        }
+      }
+    }
+    return total
+  }, [variablePlanningItems, transactions])
+
+  const variablePlanningBarsCollapsed = useMemo(() => {
+    return variablePlanningItems
+      .filter(
+        (i) =>
+          i.status === "pendente" &&
+          i.contabilizaNoTotal !== false &&
+          roundMoney2(Number(i.plannedValue ?? 0)) > 0,
+      )
+      .map((i) => ({
+        key: planningRowKey(i),
+        label: String(i.displayLabel || i.descricao || "—").trim(),
+        value: roundMoney2(Number(i.plannedValue ?? 0)),
+      }))
+  }, [variablePlanningItems])
+
+  const provisionAgendadoNoMesTotal = useMemo(
+    () => sumProvisionAgendadoNoMes(variablePlanningItems, viewYM.y, viewYM.m),
+    [variablePlanningItems, viewYM.y, viewYM.m],
+  )
 
   useEffect(() => {
     if (!listOptionsOpen) return
@@ -848,6 +1545,448 @@ function Lancamentos() {
           {message}
         </div>
       ) : null}
+
+      <section className="rounded-2xl border border-[#d8c08a]/45 bg-[#f8f2e3]/80 shadow-sm">
+        <div className="border-b border-[#d8c08a]/35 bg-[#fbf6ea]/85 px-3 py-4 sm:px-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0 flex-1">
+              <h2 className="text-base font-bold tracking-tight text-slate-900 sm:text-lg">
+                Planejamento de Despesas Variáveis
+              </h2>
+              <p className="mt-1 text-xs leading-relaxed text-slate-600 sm:text-sm">
+                Reserve antes de executar. Valores <span className="font-semibold text-slate-800">planejados</span> entram
+                no saldo previsto. O valor da provisão usa digitação a partir de <strong className="text-slate-800">centavos</strong>{" "}
+                (como caixa registradora). Depois de guardar o valor, agende uma ou mais datas até cobrir o montante —
+                use <strong className="text-slate-800">Guardar agendamentos</strong> para gravar; as linhas aparecem como
+                despesas previstas na lista.
+              </p>
+              <div className="mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-1 text-[11px] text-slate-600">
+                <span>
+                  Provisões pendentes:{" "}
+                  <span className="valora-num font-semibold text-amber-900">
+                    {formatCurrency(variablePlanningTotals.comprometidoPendente)}
+                  </span>
+                </span>
+                <span>
+                  Liberado no mês:{" "}
+                  <span className="valora-num font-semibold text-slate-800">{formatCurrency(variablePlanningTotals.liberado)}</span>
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setVariablePlanningAccordionOpen((open) => !open)}
+              className="valora-gold-button shrink-0 rounded-xl px-4 py-2.5 text-sm font-semibold"
+            >
+              {variablePlanningAccordionOpen ? "Recolher formulário" : "Abrir formulário"}
+            </button>
+          </div>
+
+          {!variablePlanningAccordionOpen ? (
+            <div className="mt-3 rounded-xl border border-[#d8c08a]/35 bg-white/60 px-3 py-2.5">
+              {variablePlanningTotals.comprometidoPendente <= 0 ? (
+                <p className="text-xs text-slate-600">
+                  Sem provisões pendentes com valor neste mês. Abra o formulário para planear.
+                </p>
+              ) : (
+                <div className="space-y-2.5">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-slate-200/80 pb-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+                      Saldo provisionado (pendente)
+                    </span>
+                    <span className="valora-num text-sm font-bold text-amber-950">
+                      {formatCurrency(variablePlanningTotals.comprometidoPendente)}
+                    </span>
+                  </div>
+                  <p className="text-[10px] leading-snug text-slate-600">
+                    A barra usa o total acima como <strong className="text-slate-800">100%</strong>. Em âmbar: valor
+                    já <strong className="text-slate-800">agendado com data neste mês</strong>. Em cinza: o restante do
+                    saldo ainda por calendarizar.
+                  </p>
+                  {(() => {
+                    const provTotal = roundMoney2(variablePlanningTotals.comprometidoPendente)
+                    const agendado = roundMoney2(provisionAgendadoNoMesTotal)
+                    const flexivel = roundMoney2(Math.max(0, provTotal - agendado))
+                    const pctAgendado =
+                      provTotal > 0 ? Math.min(100, Math.max(0, (agendado / provTotal) * 100)) : 0
+                    const pctFlex = Math.max(0, 100 - pctAgendado)
+                    return (
+                      <>
+                        <div className="flex flex-wrap items-end justify-between gap-2 text-[10px] text-slate-600">
+                          <span>
+                            Agendado no mês{" "}
+                            <strong className="valora-num text-amber-900">{formatCurrency(agendado)}</strong>
+                          </span>
+                          <span>
+                            A calendarizar{" "}
+                            <strong className="valora-num text-slate-700">{formatCurrency(flexivel)}</strong>
+                          </span>
+                        </div>
+                        <div className="flex h-2.5 overflow-hidden rounded-full bg-slate-200">
+                          <div
+                            className="h-full bg-amber-500/90"
+                            style={{ width: `${pctAgendado}%` }}
+                            title={`Agendado: ${formatCurrency(agendado)} (${pctAgendado.toFixed(0)}% do provisionado)`}
+                          />
+                          <div
+                            className="h-full bg-slate-300/85"
+                            style={{ width: `${pctFlex}%` }}
+                            title={`A calendarizar: ${formatCurrency(flexivel)}`}
+                          />
+                        </div>
+                        {variablePlanningBarsCollapsed.length > 0 ? (
+                          <div className="pt-1">
+                            <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-500">
+                              Por categoria
+                            </p>
+                            <ul className="mt-1 space-y-0.5 text-[10px] text-slate-700">
+                              {variablePlanningBarsCollapsed.map((bar) => (
+                                <li key={bar.key} className="flex justify-between gap-2">
+                                  <span className="min-w-0 truncate">{bar.label}</span>
+                                  <span className="valora-num shrink-0 text-slate-800">{formatCurrency(bar.value)}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                      </>
+                    )
+                  })()}
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          {variablePlanningAccordionOpen ? (
+            <>
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+                <label className="flex items-center gap-2 text-xs text-slate-700">
+                  <span className="font-semibold text-slate-800">Carteira</span>
+                  <select
+                    value={selectedWalletId}
+                    onChange={(event) => setSelectedWalletId(event.target.value)}
+                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none focus:ring-2 focus:ring-amber-300/80"
+                  >
+                    {wallets.length === 0 ? <option value="">Sem carteiras</option> : null}
+                    {wallets.map((wallet) => (
+                      <option key={wallet.id} value={String(wallet.id)}>
+                        {wallet.nome}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="mt-3 space-y-2">
+                {variablePlanningItems.map((item) => {
+                  const isPendente = item.status === "pendente"
+                  const isPrecisou = item.status === "precisou"
+                  const isNaoPrecisou = item.status === "nao_precisou"
+                  const rk = planningRowKey(item)
+                  const valorFieldId = `vp-val-${rk.replace(/[^\w-]/g, "_")}`
+                  const moneyDisplay =
+                    moneyDraftByKey[rk] !== undefined
+                      ? moneyDraftByKey[rk]
+                      : formatProvisionMoneyDisplay(item.plannedValue)
+                  const isFinalDeSemana = item.codigo === "final_de_semana"
+                  const { weekendLabelCount } = getWeekendsInMonth(viewYM.y, viewYM.m)
+                  const porSexta =
+                    item.valorPorSlot != null && Number.isFinite(item.valorPorSlot)
+                      ? item.valorPorSlot
+                      : valorPorSexta(item.plannedValue, weekendLabelCount)
+                  const valorTravado = Boolean(
+                    item.id && item.status !== "precisou" && provisionValorDesbloqueado[rk] !== true,
+                  )
+                  const plannedRounded = roundMoney2(Number(item.plannedValue ?? 0))
+                  const agendaRows = item.datasUsoPlanejadas ?? []
+                  const agendaSum = roundMoney2(
+                    agendaRows.reduce((s, r) => s + roundMoney2(Number(r?.valor ?? 0)), 0),
+                  )
+                  const agendaRestante = roundMoney2(Math.max(0, plannedRounded - agendaSum))
+                  const showAgendarMulti = !isPrecisou && item.id
+
+                  return (
+                    <div
+                      key={rk}
+                      className="grid grid-cols-1 gap-2 rounded-xl border border-slate-200 bg-white/90 px-3 py-2.5 sm:grid-cols-[minmax(0,1.35fr)_auto] sm:items-start"
+                    >
+                      <div className="flex min-w-0 flex-col gap-1">
+                        <div className="flex items-start justify-end gap-2 sm:justify-between">
+                          <div className="min-w-0 flex-1">
+                            {item.isCustom ? (
+                              <input
+                                type="text"
+                                value={item.descricao ?? item.displayLabel ?? ""}
+                                disabled={isPrecisou}
+                                placeholder="Ex: Presente, Viagem..."
+                                autoFocus={!item.id}
+                                onChange={(e) =>
+                                  setVariablePlanningItems((prev) =>
+                                    prev.map((row) =>
+                                      planningRowKey(row) === rk
+                                        ? { ...row, descricao: e.target.value, displayLabel: e.target.value }
+                                        : row,
+                                    ),
+                                  )
+                                }
+                                onBlur={(e) => void persistDescricaoCustom(rk, e.target.value)}
+                                className="w-full border-b border-slate-300 bg-transparent px-0.5 py-1 text-sm font-semibold text-slate-800 outline-none placeholder:text-sm placeholder:font-normal placeholder:text-slate-400 focus:border-amber-500 disabled:cursor-not-allowed disabled:bg-slate-100/80 disabled:opacity-70"
+                                aria-label="Descrição da provisão"
+                              />
+                            ) : (
+                              <p className="text-sm font-medium text-slate-800">{item.displayLabel}</p>
+                            )}
+                          </div>
+                          {!isPrecisou && (item.id || item.isCustom) ? (
+                            <button
+                              type="button"
+                              title="Excluir provisão"
+                              aria-label="Excluir provisão"
+                              onClick={() => void handleExcluirProvisao(item)}
+                              className="shrink-0 rounded-lg border border-rose-200/90 bg-rose-50/95 p-1.5 text-rose-700 transition hover:bg-rose-100"
+                            >
+                              <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden>
+                                <path
+                                  fillRule="evenodd"
+                                  d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.52.149.023a.75.75 0 0 0 .23-1.482A41.78 41.78 0 0 0 14 4.193V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 7.5a.75.75 0 1 0 1.5-.06l-.3-7.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 7.5a.75.75 0 1 0 1.5.06l.3-7.5Z"
+                                  clipRule="evenodd"
+                                />
+                              </svg>
+                            </button>
+                          ) : null}
+                        </div>
+                        {isFinalDeSemana ? (
+                          <>
+                            <p className="text-[10px] leading-snug text-slate-600">
+                              Reserva dividida para as próximas sextas-feiras
+                              {porSexta != null && weekendLabelCount > 0 ? (
+                                <span className="mt-0.5 block text-slate-500">
+                                  Referência: {formatCurrency(porSexta)} por sexta ({weekendLabelCount} no mês).
+                                </span>
+                              ) : null}
+                            </p>
+                            {Number(item.plannedValue) > 0 && weekendLabelCount > 0 ? (
+                              <div className="mt-1.5 rounded-lg border border-amber-100 bg-amber-50 px-2 py-1.5 text-[11px] leading-snug text-amber-900">
+                                <p>
+                                  Este mês tem <strong>{weekendLabelCount} sextas-feiras</strong> (referência para a reserva).
+                                </p>
+                                <p className="mt-0.5">
+                                  Sugestão por sexta:{" "}
+                                  <strong>{formatCurrency(Number(item.plannedValue ?? 0) / weekendLabelCount)}</strong>.
+                                </p>
+                              </div>
+                            ) : null}
+                          </>
+                        ) : null}
+                        <p className="text-[10px] text-slate-600">
+                          {isPendente && "Pendente — gravar o valor confirma o planejamento desta reserva."}
+                          {isPrecisou && "Lançamento vinculado na lista de despesas."}
+                          {isNaoPrecisou && "Liberto — não usar esta reserva neste mês."}
+                        </p>
+                        {isPrecisou ? (
+                          <span className="mt-0.5 inline-flex w-fit rounded-lg border border-amber-200/90 bg-amber-50/90 px-2 py-0.5 text-[10px] font-semibold text-amber-950">
+                            Lançado
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-xs font-medium text-slate-600">R$</span>
+                          <input
+                            id={valorFieldId}
+                            type="text"
+                            inputMode="decimal"
+                            readOnly={valorTravado}
+                            value={moneyDisplay}
+                            onChange={(event) => handleMoneyDraftChange(item, event.target.value)}
+                            onBlur={(event) => void handleMoneyDraftBlur(item, event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault()
+                                event.currentTarget.blur()
+                              }
+                            }}
+                            disabled={isPrecisou}
+                            className={`w-24 min-w-0 rounded-lg border bg-white px-2 py-1 text-right text-sm text-slate-800 outline-none focus:ring-2 focus:ring-amber-400 disabled:cursor-not-allowed disabled:bg-slate-100 ${
+                              valorTravado
+                                ? "cursor-default border-slate-300 read-only:bg-slate-50"
+                                : "border-slate-200"
+                            }`}
+                            aria-label={`Valor reservado para ${item.displayLabel}`}
+                          />
+                          {!isPrecisou ? (
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={!valorTravado}
+                              title={
+                                valorTravado
+                                  ? "Desbloquear para alterar o valor"
+                                  : "Confirmar valor no Supabase e agendar uso"
+                              }
+                              aria-label={valorTravado ? "Editar valor da provisão" : "Salvar valor da provisão"}
+                              onClick={async () => {
+                                if (valorTravado) {
+                                  setProvisionValorDesbloqueado((p) => ({ ...p, [rk]: true }))
+                                  requestAnimationFrame(() => document.getElementById(valorFieldId)?.focus())
+                                  return
+                                }
+                                const draft = moneyDraftByKey[rk]
+                                await handleMoneyDraftBlur(
+                                  item,
+                                  draft ?? document.getElementById(valorFieldId)?.value ?? "",
+                                )
+                              }}
+                              className={`valora-metal-switch min-w-[124px] shrink-0 ${
+                                valorTravado ? "valora-metal-switch--planned" : "valora-metal-switch--paid"
+                              }`}
+                            >
+                              <span className={`valora-metal-switch-knob ${valorTravado ? "" : "ml-auto"}`} />
+                              <span className="valora-metal-switch-label">{valorTravado ? "Editar" : "Salvar"}</span>
+                            </button>
+                          ) : null}
+                        </div>
+                        {!isPrecisou ? (
+                          <span className="text-[10px] text-slate-600">
+                            {valorTravado ? (
+                              <>
+                                Valor <strong className="text-slate-800">confirmado</strong> — use{" "}
+                                <strong className="text-slate-800">Editar</strong> para alterar. Enter grava ao editar.
+                              </>
+                            ) : (
+                              <>
+                                <strong className="text-slate-800">Salvar</strong> confirma o planejamento; depois
+                                pode agendar quando vai usar.
+                              </>
+                            )}
+                          </span>
+                        ) : null}
+                      </div>
+                      {showAgendarMulti ? (
+                        <div className="col-span-full mt-0.5 rounded-lg border border-[#d8c08a]/45 bg-[#fbf6ea]/90 px-3 py-2 sm:col-span-2">
+                          <div className="flex flex-wrap items-baseline justify-between gap-2">
+                            <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                              Agendar usos (data e valor)
+                            </span>
+                            <span className="text-[10px] text-slate-600">
+                              Provisionado: <strong className="text-slate-800">{formatCurrency(plannedRounded)}</strong>
+                              {" · "}
+                              Agendado: <strong className="text-slate-800">{formatCurrency(agendaSum)}</strong>
+                              {" · "}
+                              Restante: <strong className="text-amber-900">{formatCurrency(agendaRestante)}</strong>
+                            </span>
+                          </div>
+                          <div className="mt-2 space-y-2">
+                            {agendaRows.map((row) => {
+                              const slotSid = row.sid
+                              const ck = agendaDraftCellKey(rk, slotSid)
+                              const valorDisplay =
+                                agendaMoneyDraftByCell[ck] !== undefined
+                                  ? agendaMoneyDraftByCell[ck]
+                                  : formatProvisionMoneyDisplay(row?.valor ?? 0)
+                              return (
+                                <div
+                                  key={`${rk}-ag-${slotSid}`}
+                                  className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-200/80 bg-white/90 px-2 py-1.5"
+                                >
+                                  <label className="flex flex-col gap-0.5 text-[10px] text-slate-600">
+                                    Data
+                                    <input
+                                      type="date"
+                                      value={row?.data ?? ""}
+                                      onChange={(e) => handleAgendaRowDataChange(item, slotSid, e.target.value)}
+                                      className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs text-slate-800 outline-none focus:border-amber-400"
+                                    />
+                                  </label>
+                                  <label className="flex flex-col gap-0.5 text-[10px] text-slate-600">
+                                    Valor (R$)
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      value={valorDisplay}
+                                      onChange={(e) => handleAgendaValorChange(item, slotSid, e.target.value)}
+                                      className="w-24 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-right text-xs text-slate-800 outline-none focus:border-amber-400"
+                                    />
+                                  </label>
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleRemoveAgendaRow(item, slotSid)}
+                                    className="mb-0.5 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-800 hover:bg-rose-100"
+                                  >
+                                    Remover
+                                  </button>
+                                </div>
+                              )
+                            })}
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              disabled={
+                                plannedRounded <= 0 ||
+                                (agendaRestante <= 0.001 && agendaRows.some((r) => roundMoney2(Number(r?.valor ?? 0)) > 0))
+                              }
+                              onClick={() => handleAddAgendaRow(item)}
+                              className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              Adicionar linha
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void persistDatasUsoPlanejadas(item)}
+                              className="valora-gold-button rounded-lg px-3 py-1 text-[11px] font-semibold"
+                            >
+                              Guardar agendamentos
+                            </button>
+                          </div>
+                          <p className="mt-1.5 text-[10px] leading-snug text-slate-600">
+                            A soma dos valores não pode exceder o provisionado. Após guardar, as linhas aparecem na lista
+                            como despesas previstas no mês.
+                          </p>
+                        </div>
+                      ) : null}
+                    </div>
+                  )
+                })}
+                {!metaSugestaoDispensada && sugestaoMetaValor > 0.009 ? (
+                  <div className="rounded-xl border border-amber-200/90 bg-gradient-to-br from-amber-50 to-white px-3 py-3 text-sm text-slate-800 shadow-sm">
+                    <p className="leading-relaxed">
+                      Deseja mover o saldo de <strong>{formatCurrency(sugestaoMetaValor)}</strong> para a sua meta{" "}
+                      <strong className="text-amber-950">{metaSaldoNome}</strong>?
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          window.dispatchEvent(new CustomEvent(GOTO_PAGE_EVENT, { detail: { page: "Metas" } }))
+                        }
+                        className="valora-gold-button rounded-xl px-4 py-2 text-xs font-semibold"
+                      >
+                        Abrir Metas
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMetaSugestaoDispensada(true)}
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                      >
+                        Agora não
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={handleAdicionarProvisao}
+                  className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 py-3 text-sm font-medium text-slate-600 transition hover:border-amber-400 hover:text-amber-800"
+                >
+                  <span aria-hidden>+</span>
+                  Adicionar provisão
+                </button>
+              </div>
+            </>
+          ) : null}
+        </div>
+      </section>
 
       <section className="rounded-2xl border border-dashed border-slate-300 bg-white p-4 shadow-sm md:p-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1208,6 +2347,18 @@ function Lancamentos() {
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7a5b16]">Pendentes</p>
               <p className="valora-num mt-1 text-xl font-semibold text-amber-800 md:text-2xl">{formatCurrency(footerTotals.despesasPendentes)}</p>
             </div>
+            <div className="valora-metal-card w-full rounded-2xl px-2.5 py-2 md:col-span-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7a5b16]">
+                Provisões comprometidas (pendentes)
+              </p>
+              <p className="valora-num mt-1 text-xl font-semibold text-amber-900 md:text-2xl">
+                {formatCurrency(variablePlanningTotals.comprometidoPendente)}
+              </p>
+              <p className="mt-1 text-[11px] text-slate-500">
+                Reserva ainda não decidida (Precisou/Não precisou). Liberado no mês:{" "}
+                {formatCurrency(variablePlanningTotals.liberado)}
+              </p>
+            </div>
           </div>
 
           <div className="mt-3 space-y-1.5">
@@ -1269,6 +2420,19 @@ function Lancamentos() {
           </div>
         </div>
 
+        <div className="px-2 pb-3 pt-1 sm:px-4">
+          <CarryOverBanner
+            mesAtual={carryMonthKeysLan.mesAtual}
+            mesAnterior={carryMonthKeysLan.mesAnterior}
+            refreshSignal={carryRefreshKey}
+            onCarryOverSuccess={handleCarryOverSuccessLancamentos}
+            onCarryOverError={(msg) => {
+              setMessageType("error")
+              setMessage(msg)
+            }}
+          />
+        </div>
+
         {categoryDrilldown ? (
           <div className="mx-4 mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-indigo-300/40 bg-indigo-50/90 px-3 py-2 text-xs text-indigo-950 shadow-sm ring-1 ring-indigo-400/15">
             <span className="font-medium">
@@ -1319,19 +2483,21 @@ function Lancamentos() {
                         </span>
                       </p>
                     </div>
-                    <div className="mt-2 flex items-center justify-between gap-2">
-                      {!transaction.isProjected ? (
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                      {isLancamentoControleNaLista(transaction) ? (
                         <button
                           type="button"
                           onClick={() => void handleTogglePaymentStatus(transaction)}
-                          className="valora-gold-menu rounded-lg px-2 py-1 text-[10px] font-semibold"
+                          className={`valora-metal-switch valora-metal-switch--${signal.tone} max-w-full scale-90`}
+                          aria-label={`Alterar pagamento: ${signal.label}`}
                         >
-                          Alternar status
+                          <span className={`valora-metal-switch-knob ${signal.isRight ? "ml-auto" : ""}`} />
+                          <span className="valora-metal-switch-label">{signal.label}</span>
                         </button>
                       ) : (
-                        <span className="text-[10px] text-slate-400">Somente leitura</span>
+                        <span className="text-[10px] text-slate-500">Somente leitura</span>
                       )}
-                      {!transaction.isProjected ? (
+                      {isLancamentoControleNaLista(transaction) ? (
                         <div className="flex items-center gap-1.5">
                           <button
                             type="button"
@@ -1340,13 +2506,15 @@ function Lancamentos() {
                           >
                             Editar
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => void handleRemove(transaction.id)}
-                            className="rounded-md border border-rose-200/90 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700"
-                          >
-                            Remover
-                          </button>
+                          {!transaction.isProjected ? (
+                            <button
+                              type="button"
+                              onClick={() => void handleRemove(transaction.id)}
+                              className="rounded-md border border-rose-200/90 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700"
+                            >
+                              Remover
+                            </button>
+                          ) : null}
                         </div>
                       ) : null}
                     </div>
@@ -1390,16 +2558,21 @@ function Lancamentos() {
                       <td className="hidden px-3 py-2.5 md:table-cell">
                         {(() => {
                           const signal = resolvePaymentSignal(transaction)
+                          const podeAlternar = isLancamentoControleNaLista(transaction)
                           return (
                             <button
                               type="button"
                               onClick={() => void handleTogglePaymentStatus(transaction)}
-                              disabled={transaction.isProjected}
+                              disabled={!podeAlternar}
                               className={`valora-metal-switch valora-metal-switch--${signal.tone} ${
-                                transaction.isProjected ? "cursor-not-allowed opacity-65" : "cursor-pointer"
+                                podeAlternar ? "cursor-pointer" : "cursor-not-allowed opacity-65"
                               }`}
                               aria-label={`Alterar status de pagamento para ${transaction.paymentStatus === "Pago" ? "Pendente" : "Pago"}`}
-                              title={transaction.isProjected ? "Item previsto não pode ser alterado" : "Clique para alternar status"}
+                              title={
+                                podeAlternar
+                                  ? "Clique para alternar status"
+                                  : "Item previsto da provisão não pode ser alterado aqui"
+                              }
                             >
                               <span className={`valora-metal-switch-knob ${signal.isRight ? "ml-auto" : ""}`} />
                               <span className="valora-metal-switch-label">{signal.label}</span>
@@ -1409,7 +2582,7 @@ function Lancamentos() {
                       </td>
                       <td className="hidden px-3 py-2.5 text-slate-700 lg:table-cell">{transaction.category}</td>
                       <td className="hidden px-3 py-2.5 lg:table-cell">
-                        {transaction.isProjected ? (
+                        {!isLancamentoControleNaLista(transaction) ? (
                           <span className="text-xs text-slate-400">Somente leitura</span>
                         ) : (
                           <div className="flex items-center gap-2 opacity-90 transition group-hover:opacity-100">
@@ -1420,13 +2593,15 @@ function Lancamentos() {
                             >
                               Editar
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => void handleRemove(transaction.id)}
-                              className="rounded-lg border border-rose-200/90 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition-all hover:border-rose-300 hover:bg-rose-100 active:scale-[0.98]"
-                            >
-                              Remover
-                            </button>
+                            {!transaction.isProjected ? (
+                              <button
+                                type="button"
+                                onClick={() => void handleRemove(transaction.id)}
+                                className="rounded-lg border border-rose-200/90 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition-all hover:border-rose-300 hover:bg-rose-100 active:scale-[0.98]"
+                              >
+                                Remover
+                              </button>
+                            ) : null}
                           </div>
                         )}
                       </td>

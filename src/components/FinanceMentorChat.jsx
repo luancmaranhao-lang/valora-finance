@@ -7,16 +7,82 @@ const openai = new OpenAI({
   dangerouslyAllowBrowser: true,
 })
 
-function FinanceMentorChat({ monthlySnapshot, analysisScope, mentorContext }) {
-  const [messages, setMessages] = useState([
-    {
-      role: "assistant",
-      text: "Olá. Pergunte o que quiser sobre o seu mês ou peça um plano para quitar dívidas. Uso os seus lançamentos, metas e dívidas macro consolidados.",
-    },
-  ])
+const DEFAULT_WELCOME = {
+  role: "assistant",
+  text: "Olá. Pergunte o que quiser sobre o seu mês ou peça um plano para quitar dívidas. Uso os seus lançamentos, metas e dívidas macro consolidados.",
+}
+
+function buildChatStorageKey(userId, year, month) {
+  if (!userId) return null
+  return `valora_ai_chat_${userId}_${year}_${month}`
+}
+
+function normalizeStoredMessages(raw) {
+  if (!Array.isArray(raw)) return null
+  const out = []
+  for (const m of raw) {
+    if (!m || typeof m !== "object") continue
+    const role = m.role === "user" || m.role === "assistant" ? m.role : null
+    if (!role) continue
+    const text =
+      typeof m.text === "string" ? m.text : typeof m.content === "string" ? m.content : ""
+    if (!String(text).trim()) continue
+    const row = { role, text }
+    if (m.kind === "error") row.kind = "error"
+    out.push(row)
+  }
+  return out.length > 0 ? out : null
+}
+
+function writeChatToStorage(key, messages) {
+  if (!key || typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(key, JSON.stringify(messages))
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+function FinanceMentorChat({
+  monthlySnapshot,
+  analysisScope,
+  mentorContext,
+  userId = null,
+  authReady = true,
+  chatYear,
+  chatMonth,
+}) {
+  const storageKey =
+    userId && typeof chatYear === "number" && typeof chatMonth === "number"
+      ? buildChatStorageKey(userId, chatYear, chatMonth)
+      : null
+
+  const [messages, setMessages] = useState(null)
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
   const endRef = useRef(null)
+
+  useEffect(() => {
+    if (!authReady) return
+    if (!storageKey) {
+      setMessages([DEFAULT_WELCOME])
+      return
+    }
+    try {
+      const raw = window.localStorage.getItem(storageKey)
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        const normalized = normalizeStoredMessages(parsed)
+        if (normalized) {
+          setMessages(normalized)
+          return
+        }
+      }
+    } catch {
+      /* ignore corrupt storage */
+    }
+    setMessages([DEFAULT_WELCOME])
+  }, [authReady, storageKey])
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -70,26 +136,45 @@ Responda em português usando Markdown limpo e legível. Regras obrigatórias de
   5. Alerta final`
   }
 
+  function clearConversation() {
+    if (storageKey && typeof window !== "undefined") {
+      try {
+        window.localStorage.removeItem(storageKey)
+      } catch {
+        /* ignore */
+      }
+    }
+    setMessages([DEFAULT_WELCOME])
+  }
+
   async function send() {
     const trimmed = input.trim()
-    if (!trimmed || loading) return
+    if (!trimmed || loading || messages == null) return
 
     const apiKey = import.meta.env.VITE_OPENAI_API_KEY
     if (!apiKey) {
-      setMessages((m) => [
-        ...m,
-        {
-          role: "assistant",
-          kind: "error",
-          text: "Desculpe, tive um problema de conexão. Tente novamente em instantes.",
-        },
-      ])
+      setMessages((m) => {
+        const next = [
+          ...m,
+          {
+            role: "assistant",
+            kind: "error",
+            text: "Desculpe, tive um problema de conexão. Tente novamente em instantes.",
+          },
+        ]
+        writeChatToStorage(storageKey, next)
+        return next
+      })
       return
     }
     setInput("")
 
     const userBlock = { role: "user", text: trimmed }
-    setMessages((m) => [...m, userBlock])
+    setMessages((m) => {
+      const next = [...m, userBlock]
+      writeChatToStorage(storageKey, next)
+      return next
+    })
     setLoading(true)
 
     try {
@@ -102,25 +187,51 @@ Responda em português usando Markdown limpo e legível. Regras obrigatórias de
         ],
       })
       const textoResposta = response?.choices?.[0]?.message?.content || "Sem resposta do modelo."
-      setMessages((m) => [...m, { role: "assistant", text: textoResposta }])
+      setMessages((m) => {
+        const next = [...m, { role: "assistant", text: textoResposta }]
+        writeChatToStorage(storageKey, next)
+        return next
+      })
     } catch (err) {
       console.error("OpenAI chat error:", err)
-      setMessages((m) => [
-        ...m,
-        {
-          role: "assistant",
-          kind: "error",
-          text: "Desculpe, tive um problema de conexão. Tente novamente em instantes.",
-        },
-      ])
+      setMessages((m) => {
+        const next = [
+          ...m,
+          {
+            role: "assistant",
+            kind: "error",
+            text: "Desculpe, tive um problema de conexão. Tente novamente em instantes.",
+          },
+        ]
+        writeChatToStorage(storageKey, next)
+        return next
+      })
     } finally {
       setLoading(false)
     }
   }
 
+  if (!authReady || messages == null) {
+    return (
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="text-base font-semibold text-slate-900">Mentor financeiro (chat)</h2>
+        <p className="mt-4 text-sm text-slate-500">Carregando conversa...</p>
+      </section>
+    )
+  }
+
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <h2 className="text-base font-semibold text-slate-900">Mentor financeiro (chat)</h2>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <h2 className="text-base font-semibold text-slate-900">Mentor financeiro (chat)</h2>
+        <button
+          type="button"
+          onClick={clearConversation}
+          className="text-xs font-medium text-slate-500 underline decoration-slate-300 underline-offset-2 transition hover:text-slate-800"
+        >
+          Limpar conversa
+        </button>
+      </div>
 
       <div className="mt-4 space-y-3 rounded-xl border border-slate-100 bg-slate-50 p-3 sm:p-4">
         {messages.map((msg, i) => (

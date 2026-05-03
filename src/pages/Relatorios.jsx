@@ -3,7 +3,9 @@ import EmptyState from "../components/EmptyState"
 import { CategoryBarChart, CategoryPieChart } from "../components/reporting/CategoryCharts"
 import { GOTO_PAGE_EVENT, CATEGORY_DRILLDOWN_KEY } from "../constants/navigationEvents"
 import { listarContas } from "../services/contasService"
+import { listarGastosEsporadicosPorCompetencia } from "../services/gastosEsporadicosService"
 import { listarLancamentos } from "../services/lancamentosService"
+import { getYearMonthKeyFromParts, mergeGastosEsporadicosToPlanningItems, VARIABLE_PLANNING_UPDATED_EVENT } from "../utils/variablePlanningStore"
 
 const REPORT_CONTEXT_STORAGE_KEY = "valora:reportContext"
 
@@ -27,9 +29,16 @@ function drillDownToCategory(categoryLabel) {
   window.dispatchEvent(new CustomEvent(GOTO_PAGE_EVENT, { detail: { page: "Lançamentos de Despesas" } }))
 }
 
+function roundMoney2(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return 0
+  return Math.round(n * 100) / 100
+}
+
 function Relatorios() {
   const [transactions, setTransactions] = useState([])
   const [accounts, setAccounts] = useState([])
+  const [planningItemsForReport, setPlanningItemsForReport] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState("")
   const [periodType, setPeriodType] = useState("mensal")
@@ -55,6 +64,33 @@ function Relatorios() {
     }, 0)
     return () => clearTimeout(timer)
   }, [])
+
+  useEffect(() => {
+    if (periodType !== "mensal") {
+      setPlanningItemsForReport([])
+      return
+    }
+    let cancelled = false
+    const key = getYearMonthKeyFromParts(selectedYear, selectedMonth)
+    async function loadPlanning() {
+      try {
+        const rows = await listarGastosEsporadicosPorCompetencia(key)
+        if (cancelled) return
+        setPlanningItemsForReport(mergeGastosEsporadicosToPlanningItems(rows, selectedYear, selectedMonth))
+      } catch {
+        if (!cancelled) setPlanningItemsForReport([])
+      }
+    }
+    void loadPlanning()
+    function onPlanningUpdated() {
+      void loadPlanning()
+    }
+    window.addEventListener(VARIABLE_PLANNING_UPDATED_EVENT, onPlanningUpdated)
+    return () => {
+      cancelled = true
+      window.removeEventListener(VARIABLE_PLANNING_UPDATED_EVENT, onPlanningUpdated)
+    }
+  }, [periodType, selectedYear, selectedMonth])
 
   const summary = useMemo(() => {
     const pendingStatuses = new Set(["pendente", "agendada", "atrasada"])
@@ -82,7 +118,7 @@ function Relatorios() {
         const status = (item.status ?? "").toString().toLowerCase()
         return tipo === "despesa" && status === "pago"
       })
-      .reduce((sum, item) => sum + Number(item.valor ?? item.value ?? 0), 0)
+      .reduce((sum, item) => sum + Math.abs(Number(item.valor ?? item.value ?? 0)), 0)
 
     const despesasPendentesMes = scopedTransactions
       .filter((item) => {
@@ -90,11 +126,11 @@ function Relatorios() {
         const status = (item.status ?? "").toString().toLowerCase()
         return tipo === "despesa" && pendingStatuses.has(status)
       })
-      .reduce((sum, item) => sum + Number(item.valor ?? item.value ?? 0), 0)
+      .reduce((sum, item) => sum + Math.abs(Number(item.valor ?? item.value ?? 0)), 0)
 
     const contasPendentes = scopedAccounts
       .filter((item) => pendingStatuses.has((item.status ?? "").toString().toLowerCase()))
-      .reduce((sum, item) => sum + Number(item.valor ?? item.value ?? 0), 0)
+      .reduce((sum, item) => sum + Math.abs(Number(item.valor ?? item.value ?? 0)), 0)
 
     const saldoPrevisto = receitas - despesasPagas - despesasPendentesMes
 
@@ -106,13 +142,26 @@ function Relatorios() {
     )
 
     const categoryTotals = expenseRows.reduce((acc, item) => {
-      const category = item.categoria ?? item.category ?? "Outros"
-      acc[category] = (acc[category] ?? 0) + Number(item.valor ?? item.value ?? 0)
+      const rawCat = item.categoria ?? item.category
+      const category = String(rawCat ?? "").trim() || "Sem categoria"
+      const v = Math.abs(Number(item.valor ?? item.value ?? 0))
+      if (!Number.isFinite(v) || v <= 0) return acc
+      acc[category] = (acc[category] ?? 0) + v
       return acc
     }, {})
 
+    for (const item of planningItemsForReport) {
+      if (item.status !== "pendente") continue
+      if (item.contabilizaNoTotal === false) continue
+      const v = roundMoney2(Number(item.plannedValue ?? 0))
+      if (v <= 0) continue
+      const label = String(item.displayLabel || item.descricao || "Provisão").trim() || "Provisão"
+      categoryTotals[label] = (categoryTotals[label] ?? 0) + v
+    }
+
     const chartEntries = Object.entries(categoryTotals)
-      .map(([name, value]) => ({ name, value }))
+      .map(([name, value]) => ({ name, value: roundMoney2(value) }))
+      .filter((e) => e.value > 0)
       .sort((a, b) => b.value - a.value)
 
     const incomeTotals = incomeRows.reduce((acc, item) => {
@@ -148,7 +197,7 @@ function Relatorios() {
       dueSoonAccounts,
       decisionSummary,
     }
-  }, [transactions, accounts, periodType, selectedYear, selectedMonth])
+  }, [transactions, accounts, planningItemsForReport, periodType, selectedYear, selectedMonth])
 
   const currentMonthLabel = useMemo(() => {
     if (periodType === "anual") {
@@ -290,7 +339,10 @@ function Relatorios() {
 
           <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <h3 className="text-base font-semibold text-slate-900">Gasto por categoria (pizza)</h3>
-            <p className="mt-1 text-xs text-slate-500">Clique na fatia para ver os lançamentos na lista.</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Lançamentos do período + provisões variáveis pendentes (conta no total). Clique na fatia ou na legenda para ir
+              aos lançamentos.
+            </p>
             <div className="mt-6 flex justify-center">
               {summary.chartEntries.length === 0 ? (
                 <EmptyState title="Sem despesas no mês" description="Registre despesas para montar o gráfico." />

@@ -84,7 +84,7 @@ function MainLayout({ children, onSignOut }) {
       </header>
 
       <div className="mx-auto flex w-full max-w-[1440px] gap-6 px-3 py-3 pb-24 md:px-6 md:py-6 md:pb-6">
-        <aside className="hidden w-64 shrink-0 rounded-2xl border border-[#d8c08a]/55 bg-[#f4efdf]/85 p-4 shadow-sm md:block">
+        <aside className="hidden w-64 shrink-0 rounded-2xl border border-[#d8c08a]/50 bg-[#faf7ed] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.65),0_10px_28px_rgba(74,53,12,0.08)] md:block">
           <div className="mb-6 border-b border-[#d8c08a]/35 pb-4 text-center">
             <img
               src="/logo-valora-gold.png.png"
@@ -97,16 +97,14 @@ function MainLayout({ children, onSignOut }) {
             </p>
           </div>
 
-          <nav className="space-y-2">
+          <nav className="space-y-2.5">
             {menuItems.map((item) => (
               <button
                 key={item}
                 type="button"
                 onClick={() => setActivePage(item)}
-                className={`w-full rounded-lg px-4 py-2 text-left text-sm font-medium transition-all ${
-                  activePage === item
-                    ? "valora-gold-menu-active"
-                    : "valora-gold-menu"
+                className={`relative w-full rounded-xl px-4 py-2.5 text-left text-sm font-semibold text-slate-800 transition-all active:scale-[0.98] ${
+                  activePage === item ? "valora-gold-menu-active" : "valora-gold-menu"
                 }`}
               >
                 {item}
@@ -118,7 +116,7 @@ function MainLayout({ children, onSignOut }) {
             <button
               type="button"
               onClick={onSignOut}
-              className="valora-gold-menu mt-6 w-full rounded-lg px-4 py-2 text-left text-sm font-semibold"
+              className="valora-gold-menu relative mt-6 w-full rounded-xl px-4 py-2.5 text-left text-sm font-semibold text-slate-800 transition-all active:scale-[0.98]"
             >
               Sair da conta
             </button>

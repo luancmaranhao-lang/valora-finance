@@ -1,4 +1,5 @@
 import { supabase } from "./supabaseClient"
+import { normalizeOptionalUuid } from "./gastosEsporadicosService"
 
 function normalizeDateOnly(value) {
   if (!value) return value
@@ -49,6 +50,10 @@ function normalizeLancamentoPayload(lancamento = {}) {
   if ("cartao_id" in payload) {
     payload.cartao_id =
       payload.cartao_id === null || payload.cartao_id === undefined || payload.cartao_id === "" ? null : payload.cartao_id
+  }
+
+  if ("carteira_id" in payload) {
+    payload.carteira_id = normalizeOptionalUuid(payload.carteira_id)
   }
 
   return payload

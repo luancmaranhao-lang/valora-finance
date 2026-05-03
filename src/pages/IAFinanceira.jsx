@@ -3,6 +3,7 @@ import EmptyState from "../components/EmptyState"
 import FinanceMentorChat from "../components/FinanceMentorChat"
 import PageHeader from "../components/PageHeader"
 import { listarLancamentos } from "../services/lancamentosService"
+import { supabase } from "../services/supabaseClient"
 import { getWalletsSummary, WALLETS_UPDATED_EVENT } from "../services/walletsService"
 
 function formatCurrency(value) {
@@ -23,8 +24,31 @@ function parseDateOnly(value) {
 function IAFinanceira() {
   const [transactions, setTransactions] = useState([])
   const [walletSummary, setWalletSummary] = useState(() => getWalletsSummary())
+  const [userId, setUserId] = useState(null)
+  const [authReady, setAuthReady] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState("")
+
+  const chatPeriod = useMemo(() => {
+    const d = new Date()
+    return { chatYear: d.getFullYear(), chatMonth: d.getMonth() + 1 }
+  }, [])
+
+  useEffect(() => {
+    async function loadUserId() {
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser()
+        setUserId(user?.id ?? null)
+      } catch {
+        setUserId(null)
+      } finally {
+        setAuthReady(true)
+      }
+    }
+    void loadUserId()
+  }, [])
 
   useEffect(() => {
     async function loadData() {
@@ -261,7 +285,15 @@ function IAFinanceira() {
         </article>
       </section>
 
-      <FinanceMentorChat monthlySnapshot={summary} analysisScope={analysisScope} mentorContext={mentorContext} />
+      <FinanceMentorChat
+        monthlySnapshot={summary}
+        analysisScope={analysisScope}
+        mentorContext={mentorContext}
+        userId={userId}
+        authReady={authReady}
+        chatYear={chatPeriod.chatYear}
+        chatMonth={chatPeriod.chatMonth}
+      />
     </div>
   )
 }

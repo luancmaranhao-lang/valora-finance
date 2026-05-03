@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import CreditCardsPanel from "../components/CreditCardsPanel"
 import EmptyState from "../components/EmptyState"
 import FinanceInsightCard from "../components/FinanceInsightCard"
 import GoalsPanel from "../components/GoalsPanel"
 import PageHeader from "../components/PageHeader"
+import CarryOverBanner from "../components/CarryOverBanner"
 import PlanningAlertCard from "../components/PlanningAlertCard"
 import RecentTransactions from "../components/RecentTransactions"
 import StatCard from "../components/StatCard"
@@ -17,6 +18,8 @@ import {
   removeLancamentoMetaTags,
   resolvePayerShortLabel,
 } from "../utils/lancamentoDisplay"
+import { getYearMonthKeyFromParts, VARIABLE_PLANNING_UPDATED_EVENT } from "../utils/variablePlanningStore"
+import { listarGastosEsporadicosPorCompetencia, somaPendentePlanejado } from "../services/gastosEsporadicosService"
 
 const subscriptionCategory = "🔄 Assinaturas"
 
@@ -70,6 +73,20 @@ function Dashboard() {
   const [errorMessage, setErrorMessage] = useState("")
   const [currentUserId, setCurrentUserId] = useState("")
   const [nameByUserId, setNameByUserId] = useState({})
+  const [planningTick, setPlanningTick] = useState(0)
+  const planningDebounceRef = useRef(null)
+  const [provisionByMonth, setProvisionByMonth] = useState({ current: 0, previous: 0 })
+
+  const carryMonthKeys = useMemo(() => {
+    const now = new Date()
+    const cy = now.getFullYear()
+    const cm = now.getMonth()
+    const prev = new Date(cy, cm - 1, 1)
+    return {
+      mesAtual: getYearMonthKeyFromParts(cy, cm),
+      mesAnterior: getYearMonthKeyFromParts(prev.getFullYear(), prev.getMonth()),
+    }
+  }, [])
 
   const loadDashboardData = useCallback(async () => {
     try {
@@ -85,6 +102,13 @@ function Dashboard() {
     }
   }, [])
 
+  const handleCarryOverSuccessDashboard = useCallback(async () => {
+    setErrorMessage("")
+    setPlanningTick((t) => t + 1)
+    window.dispatchEvent(new Event(VARIABLE_PLANNING_UPDATED_EVENT))
+    await loadDashboardData()
+  }, [loadDashboardData])
+
   useEffect(() => {
     const timer = setTimeout(() => {
       void loadDashboardData()
@@ -94,13 +118,61 @@ function Dashboard() {
       void loadDashboardData()
     }
 
+    function handlePlanningUpdated() {
+      if (planningDebounceRef.current) clearTimeout(planningDebounceRef.current)
+      planningDebounceRef.current = setTimeout(() => {
+        planningDebounceRef.current = null
+        setPlanningTick((t) => t + 1)
+        void loadDashboardData()
+      }, 280)
+    }
+
     window.addEventListener("metas:updated", handleMetasUpdated)
+    window.addEventListener(VARIABLE_PLANNING_UPDATED_EVENT, handlePlanningUpdated)
+    window.addEventListener("storage", handlePlanningUpdated)
 
     return () => {
       clearTimeout(timer)
+      if (planningDebounceRef.current) clearTimeout(planningDebounceRef.current)
       window.removeEventListener("metas:updated", handleMetasUpdated)
+      window.removeEventListener(VARIABLE_PLANNING_UPDATED_EVENT, handlePlanningUpdated)
+      window.removeEventListener("storage", handlePlanningUpdated)
     }
   }, [loadDashboardData])
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadProvisionSums() {
+      const now = new Date()
+      const cy = now.getFullYear()
+      const cm = now.getMonth()
+      const prev = new Date(cy, cm - 1, 1)
+      const py = prev.getFullYear()
+      const pm = prev.getMonth()
+      const kc = getYearMonthKeyFromParts(cy, cm)
+      const kp = getYearMonthKeyFromParts(py, pm)
+      try {
+        const [rowsC, rowsP] = await Promise.all([
+          listarGastosEsporadicosPorCompetencia(kc),
+          listarGastosEsporadicosPorCompetencia(kp),
+        ])
+        if (cancelled) return
+        setProvisionByMonth({
+          current: somaPendentePlanejado(rowsC),
+          previous: somaPendentePlanejado(rowsP),
+        })
+      } catch (err) {
+        if (!cancelled) {
+          console.error("[Dashboard] loadProvisionSums falhou:", err)
+          setProvisionByMonth({ current: 0, previous: 0 })
+        }
+      }
+    }
+    void loadProvisionSums()
+    return () => {
+      cancelled = true
+    }
+  }, [planningTick])
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -255,7 +327,32 @@ function Dashboard() {
       })
       .reduce((sum, item) => sum + Number(item.valor ?? item.value ?? 0), 0)
 
-    const saldoPrevistoMes = receitaTotalMes - despesasRealizadasMes - despesasPendentesMes
+    const provisionPendenteMes = provisionByMonth.current
+
+    const metasComprometidasMes = metas.reduce((sum, meta) => {
+      const prazo = meta.prazo ?? meta.deadline
+      if (!prazo || !isFromMonth(prazo, currentYear, currentMonth)) return sum
+      const alvo = Number(meta.valor_alvo ?? meta.target ?? 0)
+      const atual = Number(meta.valor_atual ?? meta.current ?? 0)
+      if (!Number.isFinite(alvo) || !Number.isFinite(atual)) return sum
+      return sum + Math.max(0, alvo - atual)
+    }, 0)
+
+    const metasComprometidasMesAnterior = metas.reduce((sum, meta) => {
+      const prazo = meta.prazo ?? meta.deadline
+      if (!prazo || !isFromMonth(prazo, previousYear, previousMonth)) return sum
+      const alvo = Number(meta.valor_alvo ?? meta.target ?? 0)
+      const atual = Number(meta.valor_atual ?? meta.current ?? 0)
+      if (!Number.isFinite(alvo) || !Number.isFinite(atual)) return sum
+      return sum + Math.max(0, alvo - atual)
+    }, 0)
+
+    const saldoPrevistoMes =
+      receitaTotalMes -
+      despesasRealizadasMes -
+      despesasPendentesMes -
+      metasComprometidasMes -
+      provisionPendenteMes
 
     const previousReceitaMes = sumByType(previousMonthTransactions, "receita")
     const previousDespesasPagasMes = previousMonthTransactions
@@ -272,8 +369,14 @@ function Dashboard() {
       })
       .reduce((sum, item) => sum + Number(item.valor ?? item.value ?? 0), 0)
 
+    const provisionPendenteMesAnterior = provisionByMonth.previous
+
     const previousSaldoPrevistoMes =
-      previousReceitaMes - previousDespesasPagasMes - previousDespesasPendentesMes
+      previousReceitaMes -
+      previousDespesasPagasMes -
+      previousDespesasPendentesMes -
+      metasComprometidasMesAnterior -
+      provisionPendenteMesAnterior
 
     const monthlyPendingAccounts = sumPendingByStatus(currentMonthPendingTransactions)
     const previousPending = sumPendingByStatus(previousMonthPendingTransactions)
@@ -351,6 +454,8 @@ function Dashboard() {
       receitaTotalMes,
       despesasRealizadasMes,
       despesasPendentesMes,
+      metasComprometidasMes,
+      provisionPendenteMes,
       saldoPrevistoMes,
       monthlyPendingAccounts,
       incomeVariation: calculateVariation(receitaTotalMes, previousReceitaMes),
@@ -365,7 +470,7 @@ function Dashboard() {
       monthlySubscriptions,
       monthlySubscriptionsTotal,
     }
-  }, [transactions, currentUserId, nameByUserId])
+  }, [transactions, metas, currentUserId, nameByUserId, planningTick, provisionByMonth])
 
   const pendingTone = dashboardData.monthlyPendingAccounts > 0 ? "negative" : "neutral"
   const forecastTone = dashboardData.saldoPrevistoMes >= 0 ? "positive" : "negative"
@@ -380,7 +485,7 @@ function Dashboard() {
         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">Dashboard financeiro</span>
       </PageHeader>
 
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <StatCard
           title="Saldo do momento"
           value={dashboardData.saldoMomento}
@@ -400,9 +505,15 @@ function Dashboard() {
           tone="negative"
         />
         <StatCard
+          title="Planejamento de Variáveis"
+          value={dashboardData.provisionPendenteMes}
+          subtitle="Provisões ainda sem decisão (Precisou / Não precisou) — já descontadas no saldo previsto"
+          tone="neutral"
+        />
+        <StatCard
           title="Saldo previsto"
           value={dashboardData.saldoPrevistoMes}
-          subtitle={`Receita mes - realizadas - pendentes • ${dashboardData.forecastVariation} vs anterior`}
+          subtitle={`Receita - realizadas - pendentes - metas (prazo no mes) - provisoes pendentes • ${dashboardData.forecastVariation} vs anterior`}
           tone={forecastTone}
         />
       </section>
@@ -419,12 +530,26 @@ function Dashboard() {
         </div>
       ) : null}
 
+      <CarryOverBanner
+        mesAtual={carryMonthKeys.mesAtual}
+        mesAnterior={carryMonthKeys.mesAnterior}
+        refreshSignal={planningTick}
+        onCarryOverSuccess={handleCarryOverSuccessDashboard}
+        onCarryOverError={(msg) => setErrorMessage(msg)}
+      />
+
       <section className="grid gap-4 lg:grid-cols-2">
         <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h3 className="text-base font-semibold text-slate-900">Resumo rapido</h3>
           <p className="mt-2 text-sm text-slate-600">{dashboardData.quickSummary}</p>
           <p className="mt-3 text-sm text-slate-500">
             Saldo previsto: <span className="font-semibold text-slate-900">{formatCurrency(dashboardData.saldoPrevistoMes)}</span>
+            {" "}
+            (desconta{" "}
+            <span className="font-semibold text-slate-800">{formatCurrency(dashboardData.metasComprometidasMes)}</span> em
+            metas com prazo neste mes, e{" "}
+            <span className="font-semibold text-slate-800">{formatCurrency(dashboardData.provisionPendenteMes)}</span> em
+            provisoes pendentes com conta no total)
           </p>
         </article>
         <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -548,7 +673,17 @@ function Dashboard() {
 
       <section className="grid gap-4 xl:grid-cols-3">
         <div className="xl:col-span-2">
-          <FinanceInsightCard transactions={transactions} />
+          <FinanceInsightCard
+            transactions={transactions}
+            flowBreakdown={{
+              receitaTotalMes: dashboardData.receitaTotalMes,
+              despesasRealizadasMes: dashboardData.despesasRealizadasMes,
+              despesasPendentesMes: dashboardData.despesasPendentesMes,
+              metasComprometidasMes: dashboardData.metasComprometidasMes,
+              provisionPendenteMes: dashboardData.provisionPendenteMes,
+              saldoPrevistoMes: dashboardData.saldoPrevistoMes,
+            }}
+          />
         </div>
       </section>
 

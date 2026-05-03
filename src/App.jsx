@@ -119,7 +119,7 @@ function App() {
                 </p>
               </div>
             ) : (
-              <ActivePageComponent />
+              <ActivePageComponent onSignOut={handleSignOut} />
             )}
             <UpgradeModal
               open={isLocked}

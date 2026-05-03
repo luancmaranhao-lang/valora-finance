@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import EmptyState from "../components/EmptyState"
 import { atualizarLancamento, criarLancamento, listarLancamentos, removerLancamento } from "../services/lancamentosService"
 import { supabase } from "../services/supabaseClient"
@@ -20,6 +20,111 @@ function parseDate(value) {
   const [year, month, day] = raw.split("-").map(Number)
   const date = new Date(year, month - 1, day)
   return Number.isNaN(date.getTime()) ? null : date
+}
+
+function parseUiDateIso(value) {
+  const raw = String(value ?? "").slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null
+  const [y, m, d] = raw.split("-").map(Number)
+  const date = new Date(y, m - 1, d)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function isPastCalendarMonth(year, monthIndex, ref = new Date()) {
+  if (year < ref.getFullYear()) return true
+  if (year > ref.getFullYear()) return false
+  return monthIndex < ref.getMonth()
+}
+
+function isDateInMonthIso(isoDate, year, monthIndex) {
+  const date = parseUiDateIso(isoDate)
+  if (!date) return false
+  return date.getFullYear() === year && date.getMonth() === monthIndex
+}
+
+function lastDayOfMonth(year, monthIndex) {
+  return new Date(year, monthIndex + 1, 0).getDate()
+}
+
+function simpleKeyHash(str) {
+  let h = 0
+  for (let i = 0; i < str.length; i += 1) {
+    h = (Math.imul(31, h) + str.charCodeAt(i)) | 0
+  }
+  return Math.abs(h).toString(36)
+}
+
+function isReceitaRecorrenteFixa(item) {
+  const tipo = String(item.tipo ?? item.type ?? "").toLowerCase()
+  const rec = String(item.recorrencia ?? "unica").toLowerCase()
+  return tipo === "receita" && rec === "recorrente_fixa"
+}
+
+function buildRecurringReceitaKeyRaw(item) {
+  const desc = String(item.descricao ?? item.description ?? "")
+    .trim()
+    .toLowerCase()
+  const due = Number(item.dia_vencimento ?? 0) || 0
+  return [
+    desc,
+    String(item.categoria ?? item.category ?? "")
+      .trim()
+      .toLowerCase(),
+    String(item.forma_pagamento ?? item.payment_method ?? "")
+      .trim()
+      .toLowerCase(),
+    String(due),
+    "receita_recorrente_fixa",
+  ].join("|")
+}
+
+/**
+ * Receitas recorrentes fixas sem lançamento real no mês aparecem como previstas (espelha despesas fixas em Lançamentos).
+ */
+function buildProjectedReceitaRawRows(allRaw, year, monthIndex, now = new Date()) {
+  if (isPastCalendarMonth(year, monthIndex, now)) return []
+
+  const recurring = allRaw.filter(isReceitaRecorrenteFixa)
+  if (recurring.length === 0) return []
+
+  const sortedByDateDesc = [...recurring].sort(
+    (a, b) => new Date(b.data ?? b.date ?? 0) - new Date(a.data ?? a.date ?? 0),
+  )
+  const latestTemplateByKey = new Map()
+  sortedByDateDesc.forEach((item) => {
+    const key = buildRecurringReceitaKeyRaw(item)
+    if (!latestTemplateByKey.has(key)) latestTemplateByKey.set(key, item)
+  })
+
+  const existingKeys = new Set()
+  for (const item of allRaw) {
+    const iso = normalizeDateOnly(item.data ?? item.date)
+    if (!isDateInMonthIso(iso, year, monthIndex)) continue
+    if (isReceitaRecorrenteFixa(item)) {
+      existingKeys.add(buildRecurringReceitaKeyRaw(item))
+    }
+  }
+
+  const projected = []
+  const dueDayFallback = 1
+  latestTemplateByKey.forEach((template, key) => {
+    if (existingKeys.has(key)) return
+    const due = Number(template.dia_vencimento ?? dueDayFallback) || dueDayFallback
+    const safeDay = Math.min(Math.max(1, due), lastDayOfMonth(year, monthIndex))
+    const dataIso = `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(safeDay).padStart(2, "0")}`
+    const safeId = `proj-rec-${simpleKeyHash(key)}-${year}-${monthIndex + 1}`
+
+    projected.push({
+      ...template,
+      id: safeId,
+      data: dataIso,
+      status: "pendente",
+      recorrencia: "recorrente_fixa",
+      _projected: true,
+    })
+  })
+
+  return projected
 }
 
 function getReceitaStatus(item) {
@@ -71,12 +176,16 @@ function LancamentosReceitas() {
     return { y: now.getFullYear(), m: now.getMonth() }
   })
 
+  const reloadData = useCallback(async () => {
+    const data = await listarLancamentos()
+    setRawLancamentos(data ?? [])
+  }, [])
+
   useEffect(() => {
     const timer = setTimeout(async () => {
       try {
         setIsLoading(true)
-        const data = await listarLancamentos()
-        setRawLancamentos(data ?? [])
+        await reloadData()
       } catch (error) {
         setErrorMessage(error?.message || "Não foi possível carregar as receitas.")
       } finally {
@@ -84,7 +193,15 @@ function LancamentosReceitas() {
       }
     }, 0)
     return () => clearTimeout(timer)
-  }, [])
+  }, [reloadData])
+
+  useEffect(() => {
+    function onLancamentosUpdated() {
+      void reloadData()
+    }
+    window.addEventListener("lancamentos:updated", onLancamentosUpdated)
+    return () => window.removeEventListener("lancamentos:updated", onLancamentosUpdated)
+  }, [reloadData])
 
   const valueInputRef = useRef(null)
 
@@ -93,11 +210,6 @@ function LancamentosReceitas() {
     const timer = setTimeout(() => valueInputRef.current?.focus(), 0)
     return () => clearTimeout(timer)
   }, [formExpanded])
-
-  async function reloadData() {
-    const data = await listarLancamentos()
-    setRawLancamentos(data ?? [])
-  }
 
   function handleFormChange(event) {
     const { name, value } = event.target
@@ -139,6 +251,7 @@ function LancamentosReceitas() {
         await criarLancamento(payload)
       }
       await reloadData()
+      window.dispatchEvent(new Event("lancamentos:updated"))
       setMessage(editingId ? "Receita atualizada com sucesso." : "Receita adicionada com sucesso.")
       setFormData({
         description: "",
@@ -160,6 +273,10 @@ function LancamentosReceitas() {
   }
 
   function handleEdit(item) {
+    if (item._projected) {
+      setMessage("Itens previstos não podem ser editados. Cadastre a receita real no mês ou ajuste o modelo em um mês anterior.")
+      return
+    }
     setEditingId(item.id)
     setFormExpanded(true)
     setFormData({
@@ -175,6 +292,10 @@ function LancamentosReceitas() {
   }
 
   async function handleRemove(id) {
+    if (String(id).startsWith("proj-rec-")) {
+      setMessage("Itens previstos não podem ser excluídos.")
+      return
+    }
     try {
       await removerLancamento(id)
       if (editingId === id) {
@@ -191,6 +312,7 @@ function LancamentosReceitas() {
         })
       }
       await reloadData()
+      window.dispatchEvent(new Event("lancamentos:updated"))
     } catch (error) {
       setMessage(error?.message || "Não foi possível excluir a receita.")
     }
@@ -217,13 +339,21 @@ function LancamentosReceitas() {
   )
 
   const receitasDoMes = useMemo(() => {
-    return rawLancamentos
+    const inMonthReal = rawLancamentos
       .filter((item) => String(item.tipo ?? "").toLowerCase() === "receita")
       .filter((item) => {
         const date = parseDate(item.data)
         return date && date.getFullYear() === viewYM.y && date.getMonth() === viewYM.m
       })
-      .map((item) => ({ ...item, valor: Number(item.valor ?? 0), _status: getReceitaStatus(item) }))
+
+    const projectedRaw = buildProjectedReceitaRawRows(rawLancamentos, viewYM.y, viewYM.m)
+
+    return [...projectedRaw, ...inMonthReal]
+      .map((item) => ({
+        ...item,
+        valor: Number(item.valor ?? 0),
+        _status: getReceitaStatus(item),
+      }))
       .sort((a, b) => {
         const da = parseDate(a.data)?.getTime() ?? 0
         const db = parseDate(b.data)?.getTime() ?? 0
@@ -357,6 +487,10 @@ function LancamentosReceitas() {
                   onChange={handleFormChange}
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-slate-300"
                 />
+                <span className="block text-[11px] leading-relaxed text-slate-500">
+                  Nos meses atuais e futuros, a lista mostra a receita como <strong>Previsto</strong> até existir um
+                  lançamento real naquele mês (igual despesas fixas em Lançamentos).
+                </span>
               </label>
             ) : null}
             <label className="space-y-1.5">
@@ -442,7 +576,10 @@ function LancamentosReceitas() {
       {isLoading ? (
         <EmptyState title="Carregando receitas" description="Aguarde enquanto buscamos os lançamentos do mês." />
       ) : receitasDoMes.length === 0 ? (
-        <EmptyState title="Nenhuma receita encontrada" description="Cadastre receitas em Lançamentos para preencher este resumo." />
+        <EmptyState
+          title="Nenhuma receita encontrada"
+          description="Cadastre receitas ou use Salário recorrente: meses atuais e futuros mostram previsão quando ainda não houver lançamento real."
+        />
       ) : (
         <section className="relative overflow-hidden rounded-3xl border border-slate-800/15 bg-gradient-to-b from-slate-50/80 to-white shadow-[0_20px_50px_-24px_rgba(15,23,42,0.45)] ring-1 ring-slate-900/[0.04]">
           <table className="w-full border-collapse text-sm">
@@ -463,7 +600,12 @@ function LancamentosReceitas() {
                     rowIdx % 2 === 0 ? "bg-white/[0.97]" : "bg-slate-50/[0.85]"
                   } hover:bg-emerald-400/[0.07] hover:shadow-[inset_0_0_0_9999px_rgba(52,211,153,0.06)]`}
                 >
-                  <td className="px-3 py-2.5 text-xs text-slate-600 md:text-sm">{normalizeDateOnly(item.data)}</td>
+                  <td className="px-3 py-2.5 text-xs text-slate-600 md:text-sm">
+                    {normalizeDateOnly(item.data)}
+                    {item._projected ? (
+                      <span className="mt-0.5 block text-[10px] font-medium text-sky-700">Previsto (recorrente)</span>
+                    ) : null}
+                  </td>
                   <td className="px-3 py-2.5 text-slate-900">{item.descricao || "Receita"}</td>
                   <td className="px-3 py-2.5">
                     <span className={`valora-metal-switch valora-metal-switch--${item._status.tone}`}>
@@ -472,22 +614,26 @@ function LancamentosReceitas() {
                     </span>
                   </td>
                   <td className="px-3 py-2.5">
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleEdit(item)}
-                        className="rounded-lg border border-blue-200/90 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 transition-all hover:border-blue-300 hover:bg-blue-100"
-                      >
-                        Editar
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleRemove(item.id)}
-                        className="rounded-lg border border-rose-200/90 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition-all hover:border-rose-300 hover:bg-rose-100"
-                      >
-                        Excluir
-                      </button>
-                    </div>
+                    {item._projected ? (
+                      <span className="text-xs text-slate-400">Somente leitura</span>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleEdit(item)}
+                          className="rounded-lg border border-blue-200/90 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 transition-all hover:border-blue-300 hover:bg-blue-100"
+                        >
+                          Editar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleRemove(item.id)}
+                          className="rounded-lg border border-rose-200/90 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition-all hover:border-rose-300 hover:bg-rose-100"
+                        >
+                          Excluir
+                        </button>
+                      </div>
+                    )}
                   </td>
                   <td className="valora-num px-3 py-2.5 text-right font-semibold text-slate-900">{formatCurrency(item.valor)}</td>
                 </tr>

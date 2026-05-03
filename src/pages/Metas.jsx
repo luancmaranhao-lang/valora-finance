@@ -14,6 +14,15 @@ const initialForm = {
 }
 const emergencyMetaName = "Reserva de Emergência"
 
+/** Casa e Alimentação (com ou sem emoji; ignora acentos em "Alimentação"). */
+function isEmergencySuggestionCategory(rawCategory) {
+  const s = String(rawCategory ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+  return s.includes("casa") || s.includes("alimentacao")
+}
+
 function formatCurrency(value) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value)
 }
@@ -84,7 +93,7 @@ function Metas() {
         const monthlyTotals = new Map()
         ;(allLancamentos ?? [])
           .filter((item) => String(item.tipo ?? item.type ?? "").toLowerCase() === "despesa")
-          .filter((item) => String(item.categoria ?? item.category ?? "").toLowerCase().includes("casa"))
+          .filter((item) => isEmergencySuggestionCategory(item.categoria ?? item.category))
           .forEach((item) => {
             const rawDate = String(item.data ?? item.date ?? "").slice(0, 10)
             if (!/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) return
@@ -106,7 +115,7 @@ function Metas() {
         if (effectiveMonthCount === 0) {
           const currentMonthTotal = (allLancamentos ?? [])
             .filter((item) => String(item.tipo ?? item.type ?? "").toLowerCase() === "despesa")
-            .filter((item) => String(item.categoria ?? item.category ?? "").toLowerCase().includes("casa"))
+            .filter((item) => isEmergencySuggestionCategory(item.categoria ?? item.category))
             .reduce((sum, item) => {
               const rawDate = String(item.data ?? item.date ?? "").slice(0, 10)
               if (!/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) return sum
@@ -196,7 +205,9 @@ function Metas() {
   async function handleCreateEmergencyMeta() {
     const target = houseMonthlyAverage * 6
     if (!target) {
-      setMessage("Cadastre despesas de Casa nos últimos meses para sugerir a reserva automática.")
+      setMessage(
+        "Cadastre despesas nas categorias Casa e/ou Alimentação nos últimos meses para sugerir a reserva automática.",
+      )
       return
     }
     try {
@@ -365,7 +376,8 @@ function Metas() {
           <div>
             <h2 className="text-lg font-semibold text-[#3f3011]">Meta sugerida: {emergencyMetaName}</h2>
             <p className="text-xs text-[#6e5720]">
-              Base automática: média dos últimos 6 meses passados de Casa x 6 (dividindo pelos meses com dados).
+              Base automática: média dos últimos 6 meses passados das despesas em <strong className="font-semibold">Casa</strong> e{" "}
+              <strong className="font-semibold">Alimentação</strong> (somadas por mês), vezes 6 — dividindo pelos meses com dados.
             </p>
           </div>
           <button
@@ -380,7 +392,7 @@ function Metas() {
 
         <div className="mt-4 grid gap-3 md:grid-cols-3">
           <article className="rounded-xl border border-[#d8c08a]/40 bg-white/80 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#7a5b16]">Média mensal Casa (6m)</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#7a5b16]">Média mensal Casa + Alimentação (6m)</p>
             <p className="valora-num mt-1 text-xl font-semibold text-slate-900">{formatCurrency(houseMonthlyAverage)}</p>
             <p className="mt-1 text-[11px] text-slate-500">Meses com dados: {houseMonthsCount}</p>
           </article>

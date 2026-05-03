@@ -196,6 +196,31 @@ export function CategoryPieChart({ entries, onSliceClick, size = 200 }) {
       ) : (
         <p className="text-center text-xs text-slate-500">Passe o mouse na fatia ou toque para selecionar</p>
       )}
+      {entries.length > 1 ? (
+        <ul className="mt-4 w-full max-w-xs space-y-1.5 rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5 text-left">
+          {entries.map((e, i) => (
+            <li key={e.name}>
+              <button
+                type="button"
+                onClick={() => setSelectedSlice(e.name)}
+                className="flex w-full items-center justify-between gap-2 rounded-lg px-1 py-0.5 text-left text-xs text-slate-800 transition hover:bg-white"
+              >
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-white/80"
+                    style={{ backgroundColor: COLORS[i % COLORS.length] }}
+                    aria-hidden
+                  />
+                  <span className="truncate font-medium">{e.name}</span>
+                </span>
+                <span className="valora-num shrink-0 text-[11px] font-semibold tabular-nums text-slate-900">
+                  {formatBrl(e.value)}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   )
 }
