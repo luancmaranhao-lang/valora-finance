@@ -91,11 +91,12 @@ function FinanceMentorChat({
   const endRef = useRef(null)
 
   const monthLabel = mentorContext?.monthName || "este mês"
-  const dataTrava =
+  /** Aviso informativo (não bloqueia o chat): quanto mais dados, mais fiável o contexto enviado ao modelo. */
+  const mostrarAvisoDadosIncompletos =
     monthLaunchCount < MIN_LAUNCHES_FOR_MENTOR || !variablePlanningReady
   const limiteFreemiumAtingido =
     !isSubscriptionLoading && !isPremium && consultasHoje >= FREE_MENTOR_CONSULTAS_POR_DIA
-  const chatInputBloqueado = dataTrava || limiteFreemiumAtingido || isSubscriptionLoading
+  const chatInputBloqueado = limiteFreemiumAtingido || isSubscriptionLoading
 
   const refreshConsultasHoje = useCallback(async () => {
     if (!userId || isPremium) {
@@ -165,6 +166,9 @@ function FinanceMentorChat({
     const saldoRealFormula = mentorContext?.saldoRealDisponivelFormula ?? ""
     const provisoesResumo = mentorContext?.provisoesResumo ?? "Sem dados de provisões."
     const metasResumo = mentorContext?.metasResumo ?? "Sem metas cadastradas."
+    const beneficioVsMercadoResumo =
+      mentorContext?.beneficioVsMercadoResumo ??
+      "Sem resumo automático; use a lista de lançamentos e as regras de benefício abaixo."
     const ws = mentorContext?.weekendStats
     const weekendLine =
       ws && typeof ws.fridays === "number"
@@ -195,6 +199,8 @@ ALERTA DE CONTAS VENCIDAS/PENDENTES: ${resumoVencidas || "Nenhuma conta atrasada
 TODOS OS LANÇAMENTOS DO MÊS: ${resumoLancamentos || "Sem lançamentos no mês."}
 TENDÊNCIA MESES SUBSEQUENTES: ${futureContext}
 
+DETECÇÃO HEURÍSTICA BENEFÍCIO × MERCADO/ALIMENTAÇÃO (use como pista; confirme na lista acima): ${beneficioVsMercadoResumo}
+
 ## Prioridade absoluta (obrigatória)
 Toda recomendação sobre gastos, prioridade de pagamento, margem ou "quanto pode usar" deve **ancorar explicitamente** no **Saldo Real Disponível** (carteiras menos despesas pendentes do mês nos lançamentos menos provisões variáveis pendentes). Não contradiga esse número nem sugira valores superiores ao caixa livre assim calculado. O saldo previsto de fluxo do mês é complementar, nunca substituto para decisões de caixa imediato.
 
@@ -202,7 +208,10 @@ Toda recomendação sobre gastos, prioridade de pagamento, margem ou "quanto pod
 1. Sempre que orientar gasto extra, citação explícita do **Saldo real disponível (pós-reservas)** com o valor R$ ${saldoRealNum} no bloco "Situação atual" (e relacione com provisões quando relevante).
 2. Para **Lazer** e **Final de semana**: use a divisão por sextas do mês conforme indicado nas provisões (função getWeekendsInMonth no app — mesma lógica que gerou as referências "por sexta" acima).
 3. **Receitas**: se houver receita relevante no mês e metas com gap (falta até o objetivo), sugira primeiro **aporte em metas** antes de ampliar gastos discricionários.
-4. Prioridades de pagamento com dinheiro em carteira: use o total em carteiras, o saldo real disponível e a lista de contas pendentes/vencidas; não recomende gastos acima do caixa disponível após reservas.
+4. **Benefício de alimentação × Mercado/Alimentação (caixa vs benefício):** sempre que existir despesa em categoria **Mercado** ou **Alimentação** cujo valor seja **aproximadamente o mesmo** (ex.: ±15%) de uma receita de **Vale Alimentação**, **Ticket Alimentação**, **VR/VA** ou descrição equivalente no mês, trate o par como **compensado pelo benefício**: **não** peça para pagar essa despesa com **Saldo Real** nem com dinheiro das carteiras comuns — explique que o custo tende a sair do benefício. Se o benefício estiver **previsto ou já recebido (pago)** no mês, considere o par **anulado para efeito de pressão sobre o caixa** (não impacta a recomendação de “o que pagar agora” com dinheiro comum).
+5. **Bloco "O que pagar agora":** **exclua** ou **marque como já coberta por benefício** as despesas Mercado/Alimentação que estiverem pareadas com receita de vale/ticket conforme a regra 4; liste primeiro o que **efetivamente** deve sair de **conta bancária, dinheiro, PIX, débito, boleto ou fatura de cartão** (caixa real).
+6. **Bloco "Prioridade de pagamento":** priorize **boletos, faturas de cartão, financiamentos, aluguel, condomínio, energia, água, internet** e outras obrigações que **saem de conta corrente / dinheiro / cartão**; **depois** despesas variáveis discricionárias. **Não** trate compras de mercado cobertas por vale como prioridade de liquidação com saldo comum.
+7. Prioridades com dinheiro em carteira: use o total em carteiras, o saldo real disponível e a lista de contas pendentes/vencidas **após** aplicar a lógica de benefício acima; não recomende gastos acima do caixa disponível após reservas.
 
 Sua missão: Analise os lançamentos para identificar onde o usuário está gastando mais, alerte com urgência sobre contas vencidas, sugira cortes se o saldo estiver negativo e ajude a estruturar um planejamento para o mês subsequente.
 Responda em português usando Markdown limpo e legível. Regras obrigatórias de formatação:
@@ -339,8 +348,6 @@ Responda em português usando Markdown limpo e legível. Regras obrigatórias de
     )
   }
 
-  const travaDadosMensagem = `Ainda não consigo te mentorar! Preencha pelo menos **${MIN_LAUNCHES_FOR_MENTOR} lançamentos** em **${monthLabel}** e registe **provisões** no planejamento de variáveis (Lançamentos → variáveis) para eu calcular o seu **Saldo Real**.`
-
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -363,18 +370,23 @@ Responda em português usando Markdown limpo e legível. Regras obrigatórias de
         <p className="mt-2 text-xs text-slate-500">A verificar plano…</p>
       ) : null}
 
-      {dataTrava ? (
-        <div className="mt-3 rounded-xl border border-amber-200/90 bg-amber-50/95 px-3 py-3 text-sm leading-relaxed text-amber-950">
-          <p className="font-semibold">Dados insuficientes</p>
-          <p className="mt-1.5 text-xs sm:text-sm">{travaDadosMensagem}</p>
-          <p className="mt-2 text-[11px] text-amber-900/90">
-            Lançamentos neste mês: <strong>{monthLaunchCount}</strong> (mínimo {MIN_LAUNCHES_FOR_MENTOR}) · Provisões em{" "}
-            <strong>{competencia ?? "—"}</strong>: {variablePlanningReady ? "ok" : "ainda vazio"}
+      {mostrarAvisoDadosIncompletos ? (
+        <div className="mt-3 rounded-xl border border-sky-200/90 bg-sky-50/90 px-3 py-3 text-sm leading-relaxed text-sky-950">
+          <p className="font-semibold">Dica para respostas mais confiáveis</p>
+          <p className="mt-1.5 text-xs sm:text-sm">
+            O mentor usa os seus lançamentos do mês, carteiras e provisões em <strong className="font-semibold">{monthLabel}</strong>.
+            Quanto mais completo estiver o mês (recomendamos pelo menos <strong>{MIN_LAUNCHES_FOR_MENTOR}</strong> lançamentos) e o
+            planejamento de variáveis em <strong>Lançamentos</strong>, mais fiáveis ficam os números — sobretudo o{" "}
+            <strong>Saldo Real</strong>.
+          </p>
+          <p className="mt-2 text-[11px] text-sky-900/90">
+            Agora: <strong>{monthLaunchCount}</strong> lançamento(s) no mês · Provisões{" "}
+            <strong>{competencia ?? "—"}</strong>: {variablePlanningReady ? "registadas" : "ainda sem registo"}
           </p>
         </div>
       ) : null}
 
-      {!dataTrava && limiteFreemiumAtingido ? (
+      {limiteFreemiumAtingido ? (
         <div className="mt-3 rounded-xl border border-violet-200/90 bg-violet-50/95 px-3 py-3 text-sm text-violet-950">
           <p className="font-semibold">Limite gratuito atingido</p>
           <p className="mt-1.5 text-xs sm:text-sm">
@@ -442,8 +454,8 @@ Responda em português usando Markdown limpo e legível. Regras obrigatórias de
           }
           placeholder={
             chatInputBloqueado
-              ? dataTrava
-                ? "Complete lançamentos e provisões para desbloquear"
+              ? isSubscriptionLoading
+                ? "A carregar…"
                 : "Limite diário atingido"
               : "Ex: Como posso cortar gastos em lazer este mês?"
           }

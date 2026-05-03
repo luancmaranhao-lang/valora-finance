@@ -874,19 +874,87 @@ function Lancamentos() {
     })
   }
 
+  /**
+   * Confirma gasto de um slot agendado na provisão: grava despesa paga e remove o slot (sem abrir o planejamento).
+   */
+  async function materializeAgendaSlotAsPaid(transaction) {
+    const { rowKey, slotSid } = transaction.agendaLink ?? {}
+    if (!rowKey || slotSid == null || String(slotSid) === "") throw new Error("Item inválido.")
+
+    const item = variablePlanningItemsRef.current.find((i) => planningRowKey(i) === rowKey)
+    if (!item?.id) throw new Error("Guarde o valor da provisão antes de confirmar o gasto.")
+
+    const latest = variablePlanningItemsRef.current.find((i) => samePlanningItem(i, item)) ?? item
+    const slot = (latest.datasUsoPlanejadas ?? []).find((s) => String(s.sid) === String(slotSid))
+    if (!slot) throw new Error("Agenda não encontrada.")
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser()
+    if (userError || !user?.id) throw new Error("Sessão inválida.")
+
+    const dataIso = normalizeUiDate(transaction.date)
+    const descBase =
+      String(transaction.description ?? "").trim() ||
+      String(latest.displayLabel ?? latest.descricao ?? "").trim() ||
+      "Despesa"
+    const payer =
+      String(transaction.payer ?? "").trim() ||
+      payerOptions.find((o) => o.role === "self")?.value ||
+      currentUserId ||
+      payerOptions[0]?.value ||
+      user.id
+    const txDivided = String(transaction.payer ?? "").trim() === dividedPayerValue
+
+    await criarLancamento({
+      user_id: user.id,
+      tipo: "despesa",
+      descricao: buildDescriptionWithMeta(descBase, {
+        payer,
+        splitMethod: transaction.splitRule || "50/50",
+        isDivided: txDivided,
+        isInformative: Boolean(transaction.isInformative),
+      }),
+      categoria: String(transaction.category ?? "").trim() || "🍿 Lazer",
+      valor: roundMoney2(Number(transaction.value)),
+      data: dataIso,
+      forma_pagamento: String(transaction.paymentMethod ?? "PIX").trim() || "PIX",
+      numero_parcelas: 1,
+      recorrencia: "unica",
+      dia_vencimento: null,
+      status: "pago",
+      visibilidade: visibilityMap[transaction.visibility] ?? "privado",
+      metodo_divisao: txDivided ? divisionMethodMap[transaction.splitRule] ?? "igual" : null,
+      cartao_id: transaction.cartaoId || null,
+    })
+
+    await handleRemoveAgendaRow(latest, slotSid)
+    await refreshPlanningFromDb()
+  }
+
   async function handleTogglePaymentStatus(event, transaction) {
     event?.stopPropagation?.()
     const nextStatus = transaction.paymentStatus === "Pago" ? "pendente" : "pago"
 
     if (transaction.isProjected) {
       if (transaction.agendaLink?.rowKey && transaction.agendaLink?.slotSid) {
-        setVariablePlanningAccordionOpen(true)
-        setPlanningUiHighlight({
-          rowKey: transaction.agendaLink.rowKey,
-          slotSid: transaction.agendaLink.slotSid,
-        })
-        setMessageType("neutral")
-        setMessage("Ajuste data e valor na agenda do planejamento abaixo; use «Guardar agendamentos» para gravar.")
+        if (nextStatus !== "pago") {
+          setMessageType("neutral")
+          setMessage("Para alterar data ou valor, use Editar ou o planejamento de variáveis.")
+          return
+        }
+        try {
+          await materializeAgendaSlotAsPaid(transaction)
+          window.dispatchEvent(new Event("lancamentos:updated"))
+          await loadLancamentos()
+          setMessageType("success")
+          setMessage("Gasto confirmado como pago e removido do agendamento da provisão.")
+        } catch (err) {
+          console.error("[Lancamentos] materializeAgendaSlotAsPaid:", err)
+          setMessageType("error")
+          setMessage(err?.message || "Não foi possível confirmar o pagamento.")
+        }
         return
       }
       if (!transaction.projectedTemplateId) return
@@ -2527,6 +2595,7 @@ function Lancamentos() {
                       {isLancamentoControleNaLista(transaction) ? (
                         <button
                           type="button"
+                          onMouseDown={(e) => e.stopPropagation()}
                           onClick={(e) => void handleTogglePaymentStatus(e, transaction)}
                           className={`valora-metal-switch valora-metal-switch--${signal.tone} max-w-full scale-90`}
                           aria-label={`Alterar pagamento: ${signal.label}`}
@@ -2602,6 +2671,7 @@ function Lancamentos() {
                           return (
                             <button
                               type="button"
+                              onMouseDown={(e) => e.stopPropagation()}
                               onClick={(e) => void handleTogglePaymentStatus(e, transaction)}
                               disabled={!podeAlternar}
                               className={`valora-metal-switch valora-metal-switch--${signal.tone} ${
@@ -2609,9 +2679,11 @@ function Lancamentos() {
                               }`}
                               aria-label={`Alterar status de pagamento para ${transaction.paymentStatus === "Pago" ? "Pendente" : "Pago"}`}
                               title={
-                                podeAlternar
-                                  ? "Clique para alternar status"
-                                  : "Item previsto da provisão não pode ser alterado aqui"
+                                !podeAlternar
+                                  ? "Item previsto da provisão não pode ser alterado aqui"
+                                  : transaction.agendaLink
+                                    ? "Confirmar que gastou (lançamento pago e remove do agendamento)"
+                                    : "Clique para alternar status"
                               }
                             >
                               <span className={`valora-metal-switch-knob ${signal.isRight ? "ml-auto" : ""}`} />

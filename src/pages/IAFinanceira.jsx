@@ -36,6 +36,31 @@ function roundMoney2(n) {
   return Math.round(x * 100) / 100
 }
 
+function normalizeMentorText(s) {
+  return String(s ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+}
+
+/** Despesa de supermercado / alimentação (categoria do app). */
+function isMercadoAlimentacaoCategory(cat) {
+  const s = normalizeMentorText(cat)
+  return s.includes("mercado") || s.includes("alimentacao")
+}
+
+/** Receita típica de vale, ticket ou benefício de alimentação (heurística por texto). */
+function isBeneficioAlimentacaoReceita(row) {
+  if (row.tipo !== "receita") return false
+  const blob = `${normalizeMentorText(row.descricao)} ${normalizeMentorText(row.categoria)}`
+  if (blob.includes("vale") && (blob.includes("aliment") || blob.includes("refeic"))) return true
+  if (blob.includes("ticket") && blob.includes("aliment")) return true
+  if (blob.includes("vale refei")) return true
+  if (/\bvr\b/.test(blob) || /\bva\b/.test(blob)) return true
+  if (blob.includes("cesta") && blob.includes("basica")) return true
+  return false
+}
+
 function IAFinanceira() {
   const [transactions, setTransactions] = useState([])
   const [walletSummary, setWalletSummary] = useState(() => getWalletsSummary())
@@ -314,6 +339,26 @@ function IAFinanceira() {
       return `${nome}: guardado R$ ${atual.toFixed(2)} / objetivo R$ ${alvo.toFixed(2)} (faltam R$ ${falta.toFixed(2)}) · prazo ${prazo}`
     })
 
+    const receitasBeneficioAlim = monthRows.filter((row) => isBeneficioAlimentacaoReceita(row))
+    const despesasMercadoAlim = monthRows.filter(
+      (row) => row.tipo === "despesa" && isMercadoAlimentacaoCategory(row.categoria),
+    )
+    const totalRecBen = roundMoney2(receitasBeneficioAlim.reduce((s, r) => s + r.valor, 0))
+    const totalDepMac = roundMoney2(despesasMercadoAlim.reduce((s, r) => s + r.valor, 0))
+    let beneficioVsMercadoResumo = ""
+    if (receitasBeneficioAlim.length === 0 && despesasMercadoAlim.length === 0) {
+      beneficioVsMercadoResumo =
+        "Nenhuma receita detetada como vale/ticket de alimentação nem despesa só em Mercado/Alimentação pelas heurísticas do app. Ainda assim aplique a regra de pareamento ao ler a lista completa."
+    } else {
+      const rList = receitasBeneficioAlim
+        .map((r) => `${r.descricao} R$ ${r.valor.toFixed(2)} [${r.status}]`)
+        .join(" | ")
+      const dList = despesasMercadoAlim
+        .map((r) => `${r.descricao} (${r.categoria}) R$ ${r.valor.toFixed(2)} [${r.status}]`)
+        .join(" | ")
+      beneficioVsMercadoResumo = `Receitas-benefício (heurística): ${receitasBeneficioAlim.length} lanç., total R$ ${totalRecBen.toFixed(2)} — ${rList || "—"}. Despesas Mercado/Alimentação: ${despesasMercadoAlim.length} lanç., total R$ ${totalDepMac.toFixed(2)} — ${dList || "—"}.`
+    }
+
     return {
       monthName,
       allExpensesMonth,
@@ -342,6 +387,7 @@ function IAFinanceira() {
       saldoRealDisponivelFormula: `Carteiras R$ ${totalWalletBalance.toFixed(2)} − despesas pendentes (lançamentos do mês) R$ ${despesasPendentesMes.toFixed(2)} − provisões variáveis pendentes (gastos_esporadicos) R$ ${totalVariaveisPendentes.toFixed(2)} = R$ ${saldoRealDisponivel.toFixed(2)}`,
       provisoesResumo: provisoesLinhas.join(" | ") || "Nenhuma provisão pendente com valor > 0.",
       metasResumo: metasLinhas.join(" | ") || "Nenhuma meta cadastrada.",
+      beneficioVsMercadoResumo,
     }
   }, [transactions, summary, walletSummary, mentorExtras])
 

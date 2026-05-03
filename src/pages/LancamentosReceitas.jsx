@@ -116,6 +116,7 @@ function buildProjectedReceitaRawRows(allRaw, year, monthIndex, now = new Date()
 
     projected.push({
       ...template,
+      _projectedTemplateId: template.id,
       id: safeId,
       data: dataIso,
       status: "pendente",
@@ -146,6 +147,8 @@ function LancamentosReceitas() {
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [editingId, setEditingId] = useState(null)
+  /** Ao editar linha prevista (recorrente), gravamos cópia real no mês a partir deste modelo em `lancamentos`. */
+  const [projectedEditTemplateId, setProjectedEditTemplateId] = useState(null)
   const [errorMessage, setErrorMessage] = useState("")
   const [formExpanded, setFormExpanded] = useState(false)
   const [message, setMessage] = useState("")
@@ -211,6 +214,11 @@ function LancamentosReceitas() {
     return () => clearTimeout(timer)
   }, [formExpanded])
 
+  useEffect(() => {
+    if (formExpanded) return
+    setProjectedEditTemplateId(null)
+  }, [formExpanded])
+
   function handleFormChange(event) {
     const { name, value } = event.target
     setFormData((prev) => ({ ...prev, [name]: value }))
@@ -223,36 +231,69 @@ function LancamentosReceitas() {
     try {
       setIsSaving(true)
       setMessage("")
+      const fromProjected = Boolean(projectedEditTemplateId)
       const {
         data: { user },
       } = await supabase.auth.getUser()
       if (!user?.id) throw new Error("Sessão inválida.")
 
-      const payload = {
-        user_id: user.id,
-        tipo: "receita",
-        descricao: formData.description.trim(),
-        categoria: formData.category.trim(),
-        valor: Number(formData.value),
-        data: formData.date,
-        forma_pagamento: formData.paymentMethod.trim(),
-        recorrencia: formData.recurrenceType === "Salário recorrente" ? "recorrente_fixa" : "unica",
-        dia_vencimento:
-          formData.recurrenceType === "Salário recorrente" && formData.dueDay ? Number(formData.dueDay) : null,
-        status: formData.paymentStatus === "Pago" ? "pago" : "pendente",
-        visibilidade: "privado",
-        metodo_divisao: null,
-        cartao_id: null,
-      }
-
-      if (editingId) {
-        await atualizarLancamento(editingId, payload)
+      if (projectedEditTemplateId) {
+        const template = rawLancamentos.find((r) => String(r.id) === String(projectedEditTemplateId))
+        if (!template) throw new Error("Modelo da receita não encontrado. Recarregue a página.")
+        const { id: _tid, created_at: _ca, updated_at: _ua, ...templateRest } = template
+        await criarLancamento({
+          ...templateRest,
+          user_id: user.id,
+          descricao: formData.description.trim(),
+          categoria: formData.category.trim(),
+          valor: Number(formData.value),
+          data: formData.date,
+          forma_pagamento: formData.paymentMethod.trim(),
+          recorrencia: "recorrente_fixa",
+          dia_vencimento:
+            formData.recurrenceType === "Salário recorrente" && formData.dueDay
+              ? Number(formData.dueDay)
+              : Number(template.dia_vencimento ?? 0) || null,
+          status: formData.paymentStatus === "Pago" ? "pago" : "pendente",
+          visibilidade: template.visibilidade ?? template.visibility ?? "privado",
+          metodo_divisao: template.metodo_divisao ?? template.split_method ?? null,
+          cartao_id: template.cartao_id ?? null,
+          numero_parcelas: 1,
+        })
+        setProjectedEditTemplateId(null)
       } else {
-        await criarLancamento(payload)
+        const payload = {
+          user_id: user.id,
+          tipo: "receita",
+          descricao: formData.description.trim(),
+          categoria: formData.category.trim(),
+          valor: Number(formData.value),
+          data: formData.date,
+          forma_pagamento: formData.paymentMethod.trim(),
+          recorrencia: formData.recurrenceType === "Salário recorrente" ? "recorrente_fixa" : "unica",
+          dia_vencimento:
+            formData.recurrenceType === "Salário recorrente" && formData.dueDay ? Number(formData.dueDay) : null,
+          status: formData.paymentStatus === "Pago" ? "pago" : "pendente",
+          visibilidade: "privado",
+          metodo_divisao: null,
+          cartao_id: null,
+        }
+
+        if (editingId) {
+          await atualizarLancamento(editingId, payload)
+        } else {
+          await criarLancamento(payload)
+        }
       }
       await reloadData()
       window.dispatchEvent(new Event("lancamentos:updated"))
-      setMessage(editingId ? "Receita atualizada com sucesso." : "Receita adicionada com sucesso.")
+      setMessage(
+        fromProjected
+          ? "Receita deste mês gravada com o valor indicado (substitui a previsão neste mês)."
+          : editingId
+            ? "Receita atualizada com sucesso."
+            : "Receita adicionada com sucesso.",
+      )
       setFormData({
         description: "",
         category: "💼 Trabalho",
@@ -274,9 +315,28 @@ function LancamentosReceitas() {
 
   function handleEdit(item) {
     if (item._projected) {
-      setMessage("Itens previstos não podem ser editados. Cadastre a receita real no mês ou ajuste o modelo em um mês anterior.")
+      const templateId = item._projectedTemplateId
+      if (!templateId) {
+        setMessage("Não foi possível identificar o modelo desta previsão. Recarregue a página.")
+        return
+      }
+      setEditingId(null)
+      setProjectedEditTemplateId(templateId)
+      setFormExpanded(true)
+      setMessage("")
+      setFormData({
+        description: item.descricao ?? "",
+        category: item.categoria ?? "💼 Trabalho",
+        value: String(Number(item.valor ?? 0)),
+        date: normalizeDateOnly(item.data),
+        paymentStatus: String(item.status ?? "").toLowerCase() === "pago" ? "Pago" : "Pendente",
+        paymentMethod: item.forma_pagamento ?? "PIX",
+        recurrenceType: String(item.recorrencia ?? "unica") === "recorrente_fixa" ? "Salário recorrente" : "Única",
+        dueDay: item.dia_vencimento ? String(item.dia_vencimento) : "",
+      })
       return
     }
+    setProjectedEditTemplateId(null)
     setEditingId(item.id)
     setFormExpanded(true)
     setFormData({
@@ -410,6 +470,12 @@ function LancamentosReceitas() {
 
         {formExpanded ? (
           <form className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3" onSubmit={handleSubmit}>
+            {projectedEditTemplateId ? (
+              <p className="md:col-span-2 xl:col-span-3 rounded-xl border border-sky-200/80 bg-sky-50/90 px-3 py-2 text-xs leading-relaxed text-sky-950">
+                Ajuste o <strong>valor</strong> (e data ou status, se quiser) para <strong>este mês</strong>. Ao guardar, cria-se um
+                lançamento real e a linha <strong>Previsto (recorrente)</strong> deixa de aparecer neste mês.
+              </p>
+            ) : null}
             <label className="space-y-1.5">
               <span className="text-sm font-medium text-slate-700">Descrição</span>
               <input
@@ -508,7 +574,13 @@ function LancamentosReceitas() {
                 disabled={isSaving}
                 className="valora-gold-button w-full rounded-xl px-4 py-2.5 text-sm font-semibold disabled:cursor-not-allowed"
               >
-                {isSaving ? "Salvando..." : editingId ? "Salvar alterações" : "Adicionar lançamento de receita"}
+                {isSaving
+                  ? "Salvando..."
+                  : projectedEditTemplateId
+                    ? "Gravar receita deste mês"
+                    : editingId
+                      ? "Salvar alterações"
+                      : "Adicionar lançamento de receita"}
               </button>
             </div>
           </form>
@@ -614,7 +686,7 @@ function LancamentosReceitas() {
                     </span>
                   </td>
                   <td className="px-3 py-2.5">
-                    {item._projected ? (
+                    {item._projected && !item._projectedTemplateId ? (
                       <span className="text-xs text-slate-400">Somente leitura</span>
                     ) : (
                       <div className="flex items-center gap-2">
@@ -625,13 +697,15 @@ function LancamentosReceitas() {
                         >
                           Editar
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleRemove(item.id)}
-                          className="rounded-lg border border-rose-200/90 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition-all hover:border-rose-300 hover:bg-rose-100"
-                        >
-                          Excluir
-                        </button>
+                        {!item._projected ? (
+                          <button
+                            type="button"
+                            onClick={() => void handleRemove(item.id)}
+                            className="rounded-lg border border-rose-200/90 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition-all hover:border-rose-300 hover:bg-rose-100"
+                          >
+                            Excluir
+                          </button>
+                        ) : null}
                       </div>
                     )}
                   </td>
