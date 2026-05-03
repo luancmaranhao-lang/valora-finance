@@ -26,6 +26,7 @@ import {
   listarGastosEsporadicosPorCompetencia,
 } from "../services/gastosEsporadicosService"
 import { metasService } from "../services/metasService"
+import { buildProjectedRawRows, isDateInMonth } from "../utils/projectedRecurringExpenses"
 import { getWeekendsInMonth, valorPorSexta } from "../utils/weekendMonthUtils"
 import {
   dividedPayerValue,
@@ -282,18 +283,6 @@ function parseUiDate(value) {
   return Number.isNaN(date.getTime()) ? null : date
 }
 
-function isPastCalendarMonth(year, monthIndex, ref = new Date()) {
-  if (year < ref.getFullYear()) return true
-  if (year > ref.getFullYear()) return false
-  return monthIndex < ref.getMonth()
-}
-
-function isDateInMonth(isoDate, year, monthIndex) {
-  const date = parseUiDate(isoDate)
-  if (!date) return false
-  return date.getFullYear() === year && date.getMonth() === monthIndex
-}
-
 /** Soma dos valores em `datasUsoPlanejadas` com data no mês visível (provisões pendentes). */
 function sumProvisionAgendadoNoMes(items, year, monthIndex) {
   let s = 0
@@ -352,63 +341,12 @@ function isDespesaRecorrenteFixa(item) {
   return tipo === "despesa" && rec === "recorrente_fixa"
 }
 
-function lastDayOfMonth(year, monthIndex) {
-  return new Date(year, monthIndex + 1, 0).getDate()
-}
-
 function simpleKeyHash(str) {
   let h = 0
   for (let i = 0; i < str.length; i += 1) {
     h = (Math.imul(31, h) + str.charCodeAt(i)) | 0
   }
   return Math.abs(h).toString(36)
-}
-
-function buildProjectedRawRows(allRaw, year, monthIndex, now = new Date()) {
-  if (isPastCalendarMonth(year, monthIndex, now)) return []
-
-  const recurring = allRaw.filter(isDespesaRecorrenteFixa)
-  if (recurring.length === 0) return []
-
-  const sortedByDateDesc = [...recurring].sort(
-    (a, b) => new Date(b.data ?? b.date ?? 0) - new Date(a.data ?? a.date ?? 0),
-  )
-  const latestTemplateByKey = new Map()
-  sortedByDateDesc.forEach((item) => {
-    const key = buildRecurringKeyRaw(item)
-    if (!latestTemplateByKey.has(key)) latestTemplateByKey.set(key, item)
-  })
-
-  const existingKeys = new Set()
-  for (const item of allRaw) {
-    const iso = normalizeUiDate(item.data ?? item.date)
-    if (!isDateInMonth(iso, year, monthIndex)) continue
-    if (isDespesaRecorrenteFixa(item)) {
-      existingKeys.add(buildRecurringKeyRaw(item))
-    }
-  }
-
-  const projected = []
-  const dueDayFallback = 1
-  latestTemplateByKey.forEach((template, key) => {
-    if (existingKeys.has(key)) return
-    const due = Number(template.dia_vencimento ?? dueDayFallback) || dueDayFallback
-    const safeDay = Math.min(Math.max(1, due), lastDayOfMonth(year, monthIndex))
-    const dataIso = `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(safeDay).padStart(2, "0")}`
-    const safeId = `proj-${simpleKeyHash(key)}-${year}-${monthIndex + 1}`
-
-    projected.push({
-      ...template,
-      _projectedTemplateId: template.id,
-      id: safeId,
-      data: dataIso,
-      status: "pendente",
-      recorrencia: "recorrente_fixa",
-      _projected: true,
-    })
-  })
-
-  return projected
 }
 
 /** Linhas “fantasma” na lista de despesas a partir de datas/valores agendados na provisão. */

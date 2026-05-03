@@ -127,7 +127,12 @@ function Dashboard() {
       }, 280)
     }
 
+    function handleLancamentosUpdated() {
+      void loadDashboardData()
+    }
+
     window.addEventListener("metas:updated", handleMetasUpdated)
+    window.addEventListener("lancamentos:updated", handleLancamentosUpdated)
     window.addEventListener(VARIABLE_PLANNING_UPDATED_EVENT, handlePlanningUpdated)
     window.addEventListener("storage", handlePlanningUpdated)
 
@@ -135,6 +140,7 @@ function Dashboard() {
       clearTimeout(timer)
       if (planningDebounceRef.current) clearTimeout(planningDebounceRef.current)
       window.removeEventListener("metas:updated", handleMetasUpdated)
+      window.removeEventListener("lancamentos:updated", handleLancamentosUpdated)
       window.removeEventListener(VARIABLE_PLANNING_UPDATED_EVENT, handlePlanningUpdated)
       window.removeEventListener("storage", handlePlanningUpdated)
     }
@@ -236,7 +242,7 @@ function Dashboard() {
     const previousMonthDate = new Date(currentYear, currentMonth - 1, 1)
     const previousYear = previousMonthDate.getFullYear()
     const previousMonth = previousMonthDate.getMonth()
-    const pendingStatuses = new Set(["pendente", "agendada", "atrasada"])
+    const pendingStatuses = new Set(["pendente", "agendada", "atrasada", "previsto", "planned"])
 
     function parseDate(value) {
       if (!value) return null

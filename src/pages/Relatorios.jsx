@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import EmptyState from "../components/EmptyState"
 import { CategoryBarChart, CategoryPieChart } from "../components/reporting/CategoryCharts"
 import { GOTO_PAGE_EVENT, CATEGORY_DRILLDOWN_KEY } from "../constants/navigationEvents"
 import { listarContas } from "../services/contasService"
 import { listarGastosEsporadicosPorCompetencia } from "../services/gastosEsporadicosService"
 import { listarLancamentos } from "../services/lancamentosService"
+import { buildProjectedRawRows, buildProjectedRawRowsForYear } from "../utils/projectedRecurringExpenses"
 import { getYearMonthKeyFromParts, mergeGastosEsporadicosToPlanningItems, VARIABLE_PLANNING_UPDATED_EVENT } from "../utils/variablePlanningStore"
 
 const REPORT_CONTEXT_STORAGE_KEY = "valora:reportContext"
@@ -45,25 +46,30 @@ function Relatorios() {
   const [selectedYear, setSelectedYear] = useState(() => new Date().getFullYear())
   const [selectedMonth, setSelectedMonth] = useState(() => new Date().getMonth())
 
+  const loadReportData = useCallback(async () => {
+    try {
+      setIsLoading(true)
+      setErrorMessage("")
+      const [transactionsData, accountsData] = await Promise.all([listarLancamentos(), listarContas()])
+      setTransactions(transactionsData ?? [])
+      setAccounts(accountsData ?? [])
+    } catch {
+      setErrorMessage("Nao foi possivel carregar os dados do relatorio.")
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     const timer = setTimeout(() => {
-      async function loadReportData() {
-        try {
-          setIsLoading(true)
-          setErrorMessage("")
-          const [transactionsData, accountsData] = await Promise.all([listarLancamentos(), listarContas()])
-          setTransactions(transactionsData ?? [])
-          setAccounts(accountsData ?? [])
-        } catch {
-          setErrorMessage("Nao foi possivel carregar os dados do relatorio.")
-        } finally {
-          setIsLoading(false)
-        }
-      }
       void loadReportData()
     }, 0)
-    return () => clearTimeout(timer)
-  }, [])
+    window.addEventListener("lancamentos:updated", loadReportData)
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener("lancamentos:updated", loadReportData)
+    }
+  }, [loadReportData])
 
   useEffect(() => {
     if (periodType !== "mensal") {
@@ -93,7 +99,7 @@ function Relatorios() {
   }, [periodType, selectedYear, selectedMonth])
 
   const summary = useMemo(() => {
-    const pendingStatuses = new Set(["pendente", "agendada", "atrasada"])
+    const pendingStatuses = new Set(["pendente", "agendada", "atrasada", "previsto", "planned"])
 
     function isDateInSelectedPeriod(dateValue) {
       if (!dateValue) return false
@@ -105,7 +111,14 @@ function Relatorios() {
       return date.getMonth() === selectedMonth && date.getFullYear() === selectedYear
     }
 
-    const scopedTransactions = transactions.filter((item) => isDateInSelectedPeriod(item.data ?? item.date))
+    const realScoped = transactions.filter((item) => isDateInSelectedPeriod(item.data ?? item.date))
+    const projectedScoped =
+      periodType === "mensal"
+        ? buildProjectedRawRows(transactions, selectedYear, selectedMonth)
+        : periodType === "anual"
+          ? buildProjectedRawRowsForYear(transactions, selectedYear)
+          : []
+    const scopedTransactions = [...realScoped, ...projectedScoped]
     const scopedAccounts = accounts.filter((item) => isDateInSelectedPeriod(item.vencimento ?? item.dueDate))
 
     const receitas = scopedTransactions
