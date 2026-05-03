@@ -231,9 +231,15 @@ function mapDbToUi(record) {
   const isInformative = String(rawDescription).includes(infoTag)
   const isProjected = Boolean(record._projected)
 
+  const agendaLink =
+    record._provisionPlanningRowKey && record._provisionSlotSid != null && record._provisionSlotSid !== ""
+      ? { rowKey: String(record._provisionPlanningRowKey), slotSid: String(record._provisionSlotSid) }
+      : null
+
   return {
     id: record.id,
     projectedTemplateId: record._projectedTemplateId ?? null,
+    agendaLink,
     type: typeRaw === "receita" ? "Receita" : "Despesa",
     recurrenceType:
       recurrenceRaw === "recorrente_fixa"
@@ -320,14 +326,11 @@ function resolvePaymentSignal(transaction) {
   return { label: "Previsto", tone: "planned", isRight: false }
 }
 
-function isProvisionAgendaProjection(transaction) {
-  return Boolean(transaction?.isProjected && String(transaction?.id ?? "").startsWith("prov-ag-"))
-}
-
-/** Linhas reais ou fantasma de recorrência (com modelo no Supabase) — permitem alternar pagamento e editar. */
+/** Linhas reais, recorrência projetada (com modelo) ou agenda de provisão (com vínculo ao planejamento). */
 function isLancamentoControleNaLista(transaction) {
   if (!transaction?.isProjected) return true
-  if (isProvisionAgendaProjection(transaction)) return false
+  if (transaction.agendaLink?.rowKey && transaction.agendaLink?.slotSid) return true
+  if (String(transaction.id ?? "").startsWith("prov-ag-")) return false
   return Boolean(transaction.projectedTemplateId)
 }
 
@@ -434,6 +437,8 @@ function buildProvisionScheduledRawRows(items, year, monthIndex, competenciaKey)
         recorrencia: "unica",
         visibilidade: "privado",
         _projected: true,
+        _provisionPlanningRowKey: planningRowKey(item),
+        _provisionSlotSid: slot.sid,
       })
     })
   }
@@ -475,6 +480,8 @@ function Lancamentos() {
   const [selectedWalletId, setSelectedWalletId] = useState("")
   const [variablePlanningItems, setVariablePlanningItems] = useState([])
   const [variablePlanningAccordionOpen, setVariablePlanningAccordionOpen] = useState(false)
+  /** Destaca e faz scroll até a provisão/agenda ao editar a partir da lista. */
+  const [planningUiHighlight, setPlanningUiHighlight] = useState(null)
   const [moneyDraftByKey, setMoneyDraftByKey] = useState({})
   /** `rk|idx` → texto cent-first enquanto edita valor de uma linha de agendamento. */
   const [agendaMoneyDraftByCell, setAgendaMoneyDraftByCell] = useState({})
@@ -489,6 +496,23 @@ function Lancamentos() {
   useEffect(() => {
     variablePlanningItemsRef.current = variablePlanningItems
   }, [variablePlanningItems])
+
+  useEffect(() => {
+    if (!variablePlanningAccordionOpen || !planningUiHighlight?.rowKey) return
+    const rkSafe = String(planningUiHighlight.rowKey).replace(/[^\w-]/g, "_")
+    const slot = planningUiHighlight.slotSid
+    const targetId = slot
+      ? `vp-agenda-${rkSafe}-${String(slot).replace(/[^\w-]/g, "_")}`
+      : `vp-focus-${rkSafe}`
+    const rafId = requestAnimationFrame(() => {
+      document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth", block: "center" })
+    })
+    const t = setTimeout(() => setPlanningUiHighlight(null), 2600)
+    return () => {
+      cancelAnimationFrame(rafId)
+      clearTimeout(t)
+    }
+  }, [planningUiHighlight, variablePlanningAccordionOpen])
 
   useEffect(() => {
     provisionValorDesbloqueadoRef.current = provisionValorDesbloqueado
@@ -814,14 +838,17 @@ function Lancamentos() {
   }
 
   function handleEdit(transaction) {
+    if (transaction.agendaLink?.rowKey && transaction.agendaLink?.slotSid) {
+      setVariablePlanningAccordionOpen(true)
+      setPlanningUiHighlight({
+        rowKey: transaction.agendaLink.rowKey,
+        slotSid: transaction.agendaLink.slotSid,
+      })
+      setProvisionValorDesbloqueado((p) => ({ ...p, [transaction.agendaLink.rowKey]: true }))
+      setMessage("")
+      return
+    }
     if (transaction.isProjected) {
-      if (String(transaction.id ?? "").startsWith("prov-ag-")) {
-        setMessageType("error")
-        setMessage(
-          "Esta linha vem da agenda da provisão. Ajuste datas e valores no planejamento de despesas variáveis, não aqui.",
-        )
-        return
-      }
       if (!transaction.projectedTemplateId) {
         setMessageType("error")
         setMessage("Item previsto sem modelo vinculado. Recarregue a página ou verifique o lançamento recorrente base.")
@@ -856,7 +883,17 @@ function Lancamentos() {
     setCustomCategory(isDefaultCategory ? "" : transaction.category)
   }
 
-  async function handleRemove(id) {
+  async function handleRemove(transactionOrId) {
+    const isTx = transactionOrId && typeof transactionOrId === "object" && "id" in transactionOrId
+    const transaction = isTx ? transactionOrId : null
+    const id = isTx ? transaction.id : transactionOrId
+
+    if (transaction?.agendaLink?.rowKey && transaction?.agendaLink?.slotSid) {
+      const item = variablePlanningItemsRef.current.find((i) => planningRowKey(i) === transaction.agendaLink.rowKey)
+      if (item) await handleRemoveAgendaRow(item, transaction.agendaLink.slotSid)
+      return
+    }
+
     if (String(id).startsWith("proj-")) {
       setMessageType("error")
       setMessage("Itens previstos não podem ser removidos.")
@@ -903,9 +940,14 @@ function Lancamentos() {
     const nextStatus = transaction.paymentStatus === "Pago" ? "pendente" : "pago"
 
     if (transaction.isProjected) {
-      if (String(transaction.id ?? "").startsWith("prov-ag-")) {
-        setMessageType("error")
-        setMessage("Despesas previstas da provisão são geridas no planejamento de variáveis.")
+      if (transaction.agendaLink?.rowKey && transaction.agendaLink?.slotSid) {
+        setVariablePlanningAccordionOpen(true)
+        setPlanningUiHighlight({
+          rowKey: transaction.agendaLink.rowKey,
+          slotSid: transaction.agendaLink.slotSid,
+        })
+        setMessageType("neutral")
+        setMessage("Ajuste data e valor na agenda do planejamento abaixo; use «Guardar agendamentos» para gravar.")
         return
       }
       if (!transaction.projectedTemplateId) return
@@ -1553,25 +1595,32 @@ function Lancamentos() {
               <h2 className="text-base font-bold tracking-tight text-slate-900 sm:text-lg">
                 Planejamento de Despesas Variáveis
               </h2>
-              <p className="mt-1 text-xs leading-relaxed text-slate-600 sm:text-sm">
-                Reserve antes de executar. Valores <span className="font-semibold text-slate-800">planejados</span> entram
-                no saldo previsto. O valor da provisão usa digitação a partir de <strong className="text-slate-800">centavos</strong>{" "}
-                (como caixa registradora). Depois de guardar o valor, agende uma ou mais datas até cobrir o montante —
-                use <strong className="text-slate-800">Guardar agendamentos</strong> para gravar; as linhas aparecem como
-                despesas previstas na lista.
-              </p>
-              <div className="mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-1 text-[11px] text-slate-600">
-                <span>
-                  Provisões pendentes:{" "}
-                  <span className="valora-num font-semibold text-amber-900">
-                    {formatCurrency(variablePlanningTotals.comprometidoPendente)}
-                  </span>
-                </span>
-                <span>
-                  Liberado no mês:{" "}
-                  <span className="valora-num font-semibold text-slate-800">{formatCurrency(variablePlanningTotals.liberado)}</span>
-                </span>
-              </div>
+              {variablePlanningAccordionOpen ? (
+                <>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-600 sm:text-sm">
+                    Reserve antes de executar. Valores <span className="font-semibold text-slate-800">planejados</span>{" "}
+                    entram no saldo previsto. O valor da provisão usa digitação a partir de{" "}
+                    <strong className="text-slate-800">centavos</strong> (como caixa registradora). Depois de guardar o
+                    valor, agende uma ou mais datas até cobrir o montante — use{" "}
+                    <strong className="text-slate-800">Guardar agendamentos</strong> para gravar; as linhas aparecem como
+                    despesas previstas na lista.
+                  </p>
+                  <div className="mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-1 text-[11px] text-slate-600">
+                    <span>
+                      Provisões pendentes:{" "}
+                      <span className="valora-num font-semibold text-amber-900">
+                        {formatCurrency(variablePlanningTotals.comprometidoPendente)}
+                      </span>
+                    </span>
+                    <span>
+                      Liberado no mês:{" "}
+                      <span className="valora-num font-semibold text-slate-800">
+                        {formatCurrency(variablePlanningTotals.liberado)}
+                      </span>
+                    </span>
+                  </div>
+                </>
+              ) : null}
             </div>
             <button
               type="button"
@@ -1583,13 +1632,54 @@ function Lancamentos() {
           </div>
 
           {!variablePlanningAccordionOpen ? (
-            <div className="mt-3 rounded-xl border border-[#d8c08a]/35 bg-white/60 px-3 py-2.5">
+            <div className="mt-3 px-1 sm:px-0">
               {variablePlanningTotals.comprometidoPendente <= 0 ? (
                 <p className="text-xs text-slate-600">
                   Sem provisões pendentes com valor neste mês. Abra o formulário para planear.
                 </p>
               ) : (
-                <div className="space-y-2.5">
+                (() => {
+                  const provTotal = roundMoney2(variablePlanningTotals.comprometidoPendente)
+                  const agendado = roundMoney2(provisionAgendadoNoMesTotal)
+                  const flexivel = roundMoney2(Math.max(0, provTotal - agendado))
+                  const pctAgendado =
+                    provTotal > 0 ? Math.min(100, Math.max(0, (agendado / provTotal) * 100)) : 0
+                  const pctFlex = Math.max(0, 100 - pctAgendado)
+                  return (
+                    <div className="rounded-xl border border-[#d8c08a]/30 bg-white/70 px-3 py-2">
+                      <div className="flex flex-wrap items-end justify-between gap-2 text-[10px] text-slate-600">
+                        <span>
+                          Agendado no mês{" "}
+                          <strong className="valora-num text-amber-900">{formatCurrency(agendado)}</strong>
+                        </span>
+                        <span>
+                          A calendarizar{" "}
+                          <strong className="valora-num text-slate-700">{formatCurrency(flexivel)}</strong>
+                        </span>
+                      </div>
+                      <div className="mt-1.5 flex h-2.5 overflow-hidden rounded-full bg-slate-200">
+                        <div
+                          className="h-full bg-amber-500/90"
+                          style={{ width: `${pctAgendado}%` }}
+                          title={`Agendado: ${formatCurrency(agendado)} (${pctAgendado.toFixed(0)}% do provisionado)`}
+                        />
+                        <div
+                          className="h-full bg-slate-300/85"
+                          style={{ width: `${pctFlex}%` }}
+                          title={`A calendarizar: ${formatCurrency(flexivel)}`}
+                        />
+                      </div>
+                    </div>
+                  )
+                })()
+              )}
+            </div>
+          ) : null}
+
+          {variablePlanningAccordionOpen ? (
+            <>
+              {variablePlanningTotals.comprometidoPendente > 0 ? (
+                <div className="mt-3 rounded-xl border border-[#d8c08a]/35 bg-white/60 px-3 py-2.5">
                   <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-slate-200/80 pb-2">
                     <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">
                       Saldo provisionado (pendente)
@@ -1598,9 +1688,9 @@ function Lancamentos() {
                       {formatCurrency(variablePlanningTotals.comprometidoPendente)}
                     </span>
                   </div>
-                  <p className="text-[10px] leading-snug text-slate-600">
-                    A barra usa o total acima como <strong className="text-slate-800">100%</strong>. Em âmbar: valor
-                    já <strong className="text-slate-800">agendado com data neste mês</strong>. Em cinza: o restante do
+                  <p className="mt-2 text-[10px] leading-snug text-slate-600">
+                    A barra usa o total acima como <strong className="text-slate-800">100%</strong>. Em âmbar: valor já{" "}
+                    <strong className="text-slate-800">agendado com data neste mês</strong>. Em cinza: o restante do
                     saldo ainda por calendarizar.
                   </p>
                   {(() => {
@@ -1612,7 +1702,7 @@ function Lancamentos() {
                     const pctFlex = Math.max(0, 100 - pctAgendado)
                     return (
                       <>
-                        <div className="flex flex-wrap items-end justify-between gap-2 text-[10px] text-slate-600">
+                        <div className="mt-2 flex flex-wrap items-end justify-between gap-2 text-[10px] text-slate-600">
                           <span>
                             Agendado no mês{" "}
                             <strong className="valora-num text-amber-900">{formatCurrency(agendado)}</strong>
@@ -1622,7 +1712,7 @@ function Lancamentos() {
                             <strong className="valora-num text-slate-700">{formatCurrency(flexivel)}</strong>
                           </span>
                         </div>
-                        <div className="flex h-2.5 overflow-hidden rounded-full bg-slate-200">
+                        <div className="mt-1 flex h-2.5 overflow-hidden rounded-full bg-slate-200">
                           <div
                             className="h-full bg-amber-500/90"
                             style={{ width: `${pctAgendado}%` }}
@@ -1635,7 +1725,7 @@ function Lancamentos() {
                           />
                         </div>
                         {variablePlanningBarsCollapsed.length > 0 ? (
-                          <div className="pt-1">
+                          <div className="pt-2">
                             <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-500">
                               Por categoria
                             </p>
@@ -1653,12 +1743,8 @@ function Lancamentos() {
                     )
                   })()}
                 </div>
-              )}
-            </div>
-          ) : null}
+              ) : null}
 
-          {variablePlanningAccordionOpen ? (
-            <>
               <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
                 <label className="flex items-center gap-2 text-xs text-slate-700">
                   <span className="font-semibold text-slate-800">Carteira</span>
@@ -1705,10 +1791,18 @@ function Lancamentos() {
                   const agendaRestante = roundMoney2(Math.max(0, plannedRounded - agendaSum))
                   const showAgendarMulti = !isPrecisou && item.id
 
+                  const rkDom = rk.replace(/[^\w-]/g, "_")
+                  const cardHighlighted =
+                    planningUiHighlight?.rowKey === rk &&
+                    (planningUiHighlight.slotSid == null || planningUiHighlight.slotSid === "")
+
                   return (
                     <div
                       key={rk}
-                      className="grid grid-cols-1 gap-2 rounded-xl border border-slate-200 bg-white/90 px-3 py-2.5 sm:grid-cols-[minmax(0,1.35fr)_auto] sm:items-start"
+                      id={`vp-focus-${rkDom}`}
+                      className={`grid grid-cols-1 gap-2 rounded-xl border border-slate-200 bg-white/90 px-3 py-2.5 sm:grid-cols-[minmax(0,1.35fr)_auto] sm:items-start ${
+                        cardHighlighted ? "ring-2 ring-amber-400/90 ring-offset-2 ring-offset-[#fbf6ea]" : ""
+                      }`}
                     >
                       <div className="flex min-w-0 flex-col gap-1">
                         <div className="flex items-start justify-end gap-2 sm:justify-between">
@@ -1879,6 +1973,10 @@ function Lancamentos() {
                           <div className="mt-2 space-y-2">
                             {agendaRows.map((row) => {
                               const slotSid = row.sid
+                              const slotDom = String(slotSid).replace(/[^\w-]/g, "_")
+                              const rowHighlighted =
+                                planningUiHighlight?.rowKey === rk &&
+                                String(planningUiHighlight.slotSid ?? "") === String(slotSid ?? "")
                               const ck = agendaDraftCellKey(rk, slotSid)
                               const valorDisplay =
                                 agendaMoneyDraftByCell[ck] !== undefined
@@ -1887,7 +1985,10 @@ function Lancamentos() {
                               return (
                                 <div
                                   key={`${rk}-ag-${slotSid}`}
-                                  className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-200/80 bg-white/90 px-2 py-1.5"
+                                  id={`vp-agenda-${rkDom}-${slotDom}`}
+                                  className={`flex flex-wrap items-end gap-2 rounded-lg border border-slate-200/80 bg-white/90 px-2 py-1.5 ${
+                                    rowHighlighted ? "ring-2 ring-amber-400/90 ring-offset-1" : ""
+                                  }`}
                                 >
                                   <label className="flex flex-col gap-0.5 text-[10px] text-slate-600">
                                     Data
@@ -2506,10 +2607,10 @@ function Lancamentos() {
                           >
                             Editar
                           </button>
-                          {!transaction.isProjected ? (
+                          {!transaction.isProjected || transaction.agendaLink ? (
                             <button
                               type="button"
-                              onClick={() => void handleRemove(transaction.id)}
+                              onClick={() => void handleRemove(transaction)}
                               className="rounded-md border border-rose-200/90 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700"
                             >
                               Remover
@@ -2593,10 +2694,10 @@ function Lancamentos() {
                             >
                               Editar
                             </button>
-                            {!transaction.isProjected ? (
+                            {!transaction.isProjected || transaction.agendaLink ? (
                               <button
                                 type="button"
-                                onClick={() => void handleRemove(transaction.id)}
+                                onClick={() => void handleRemove(transaction)}
                                 className="rounded-lg border border-rose-200/90 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 transition-all hover:border-rose-300 hover:bg-rose-100 active:scale-[0.98]"
                               >
                                 Remover
