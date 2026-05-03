@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import EmptyState from "../components/EmptyState"
 import FinanceMentorChat from "../components/FinanceMentorChat"
 import PageHeader from "../components/PageHeader"
+import useSubscription from "../hooks/useSubscription"
 import { listarGastosEsporadicosPorCompetencia } from "../services/gastosEsporadicosService"
 import { listarLancamentos } from "../services/lancamentosService"
 import { metasService } from "../services/metasService"
@@ -43,6 +44,7 @@ function IAFinanceira() {
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState("")
   const [mentorExtras, setMentorExtras] = useState({ gastos: [], metas: [] })
+  const { isPremium, isSubscriptionLoading } = useSubscription()
 
   const chatPeriod = useMemo(() => {
     const d = new Date()
@@ -171,6 +173,23 @@ function IAFinanceira() {
       .reduce((s, i) => s + Number(i.valor ?? i.value ?? 0), 0)
     return { receitas, despesasTotais, despesasPagas, despesasPend, saldoPrevisto: receitas - despesasPagas - despesasPend }
   }, [transactions])
+
+  const monthLaunchCount = useMemo(() => {
+    const now = new Date()
+    const y = now.getFullYear()
+    const m = now.getMonth()
+    return transactions.filter((item) => {
+      const d = parseDateOnly(item.data ?? item.date)
+      return d && d.getFullYear() === y && d.getMonth() === m
+    }).length
+  }, [transactions])
+
+  const variablePlanningReady = (mentorExtras.gastos ?? []).length > 0
+
+  const mentorCompetencia = useMemo(() => {
+    const d = new Date()
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
+  }, [])
 
   const analysisScope = useMemo(() => {
     const now = new Date()
@@ -377,6 +396,11 @@ function IAFinanceira() {
         authReady={authReady}
         chatYear={chatPeriod.chatYear}
         chatMonth={chatPeriod.chatMonth}
+        monthLaunchCount={monthLaunchCount}
+        variablePlanningReady={variablePlanningReady}
+        isPremium={isPremium}
+        isSubscriptionLoading={isSubscriptionLoading}
+        competencia={mentorCompetencia}
       />
     </div>
   )
