@@ -936,7 +936,8 @@ function Lancamentos() {
     })
   }
 
-  async function handleTogglePaymentStatus(transaction) {
+  async function handleTogglePaymentStatus(event, transaction) {
+    event?.stopPropagation?.()
     const nextStatus = transaction.paymentStatus === "Pago" ? "pendente" : "pago"
 
     if (transaction.isProjected) {
@@ -2588,7 +2589,7 @@ function Lancamentos() {
                       {isLancamentoControleNaLista(transaction) ? (
                         <button
                           type="button"
-                          onClick={() => void handleTogglePaymentStatus(transaction)}
+                          onClick={(e) => void handleTogglePaymentStatus(e, transaction)}
                           className={`valora-metal-switch valora-metal-switch--${signal.tone} max-w-full scale-90`}
                           aria-label={`Alterar pagamento: ${signal.label}`}
                         >
@@ -2663,7 +2664,7 @@ function Lancamentos() {
                           return (
                             <button
                               type="button"
-                              onClick={() => void handleTogglePaymentStatus(transaction)}
+                              onClick={(e) => void handleTogglePaymentStatus(e, transaction)}
                               disabled={!podeAlternar}
                               className={`valora-metal-switch valora-metal-switch--${signal.tone} ${
                                 podeAlternar ? "cursor-pointer" : "cursor-not-allowed opacity-65"

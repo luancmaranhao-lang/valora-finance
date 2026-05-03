@@ -9,7 +9,7 @@ const openai = new OpenAI({
 
 const DEFAULT_WELCOME = {
   role: "assistant",
-  text: "Olá. Pergunte o que quiser sobre o seu mês ou peça um plano para quitar dívidas. Uso os seus lançamentos, metas e dívidas macro consolidados.",
+  text: "Olá. Pergunte o que quiser sobre o seu mês ou peça um plano para quitar dívidas. Uso lançamentos, carteiras, provisões variáveis (gastos_esporadicos), metas e o saldo real disponível após reservas.",
 }
 
 function buildChatStorageKey(userId, year, month) {
@@ -112,18 +112,48 @@ function FinanceMentorChat({
     const despesasPendentesMes = Number(mentorContext?.expensesPendingMonth ?? 0)
     const receitasMes = Number(mentorContext?.receitasMes ?? receitaTotal)
     const saldoPrevistoMes = Number(mentorContext?.saldoPrevistoMes ?? saldoPrevisto)
+    const totalVariaveisPendentes = Number(mentorContext?.totalVariaveisPendentes ?? 0)
+    const saldoRealDisponivel = Number(mentorContext?.saldoRealDisponivel ?? NaN)
+    const saldoRealFormula = mentorContext?.saldoRealDisponivelFormula ?? ""
+    const provisoesResumo = mentorContext?.provisoesResumo ?? "Sem dados de provisões."
+    const metasResumo = mentorContext?.metasResumo ?? "Sem metas cadastradas."
+    const ws = mentorContext?.weekendStats
+    const weekendLine =
+      ws && typeof ws.fridays === "number"
+        ? `Sextas no mês: ${ws.fridays}; sábados: ${ws.saturdays}; contagem usada para divisão de reservas (sexta): ${ws.weekendLabelCount}.`
+        : ""
     const futureContext = JSON.stringify(analysisScope?.futureByMonth ?? [], null, 0)
-    return `Você é o Mentor Financeiro premium do app Valora. Seu tom é direto, profissional e focado em soluções.
+    const saldoRealNum = Number.isFinite(saldoRealDisponivel) ? saldoRealDisponivel.toFixed(2) : saldoPrevistoMes.toFixed(2)
+    return `Você é o Mentor Financeiro integrado ao app Valora. Tom direto, profissional e focado em soluções. Você cruza dados reais e previstos das fontes: tabela lançamentos (receitas/despesas do mês), tabela gastos_esporadicos (planejamento variável; use valor_planejado agregado nas provisões abaixo), tabela metas (objetivos de longo prazo).
+
 Mês atual de análise: ${mesAtualNome}.
-RESUMO: Receitas: R$ ${receitaTotal.toFixed(2)}, Despesas Totais: R$ ${despesasTotais.toFixed(2)}, Despesas Pagas: R$ ${despesasRealizadas.toFixed(2)}, Despesas Pendentes: R$ ${despesasPendentes.toFixed(2)}, Saldo Previsto: R$ ${saldoPrevisto.toFixed(2)}.
-CARTEIRAS: Total disponível em carteiras: R$ ${totalWalletBalance.toFixed(2)}. Lista de carteiras: ${resumoWallets || "Sem carteiras cadastradas."}
+${weekendLine}
+
+## Dados numéricos (use estes valores; não invente)
+RESUMO LANÇAMENTOS (mês): Receitas R$ ${receitaTotal.toFixed(2)} · Despesas totais R$ ${despesasTotais.toFixed(2)} · Despesas pagas R$ ${despesasRealizadas.toFixed(2)} · Despesas pendentes R$ ${despesasPendentes.toFixed(2)} · Saldo previsto do fluxo do mês (receitas − pagas − pendentes) R$ ${saldoPrevisto.toFixed(2)}.
+
+CARTEIRAS: Total R$ ${totalWalletBalance.toFixed(2)}. Detalhe: ${resumoWallets || "Sem carteiras cadastradas."}
+
+SALDO REAL DISPONÍVEL (pós-reservas): R$ ${saldoRealNum}. Fórmula aplicada no app: ${saldoRealFormula || "Carteiras − despesas pendentes do mês (lançamentos) − total de provisões variáveis ainda pendentes (gastos_esporadicos, status pendente, conta no total)."}
+Interpretação: é o que sobra em carteiras depois de descontar compromissos já lançados como pendentes e as reservas de variáveis ainda não consumidas. Quando falar em "quanto posso gastar" ou "caixa livre", priorize este valor em relação ao saldo previsto de fluxo.
+
+PROVISÕES VARIÁVEIS (gastos_esporadicos — pendentes no total): soma pendente R$ ${Number.isFinite(totalVariaveisPendentes) ? totalVariaveisPendentes.toFixed(2) : "0.00"}. Detalhe: ${provisoesResumo}
+
+METAS (tabela metas): ${metasResumo}
+
 MÉTRICAS OPERACIONAIS: despesas pagas no mês R$ ${despesasPagasMes.toFixed(2)}; despesas pendentes no mês R$ ${despesasPendentesMes.toFixed(2)}; receitas do mês R$ ${receitasMes.toFixed(2)}; saldo previsto do mês R$ ${saldoPrevistoMes.toFixed(2)}.
+
 ALERTA DE CONTAS VENCIDAS/PENDENTES: ${resumoVencidas || "Nenhuma conta atrasada."}
 TODOS OS LANÇAMENTOS DO MÊS: ${resumoLancamentos || "Sem lançamentos no mês."}
 TENDÊNCIA MESES SUBSEQUENTES: ${futureContext}
 
+## Regras de inteligência (obrigatórias)
+1. Sempre que orientar gasto extra, citação explícita do **Saldo real disponível (pós-reservas)** com o valor R$ ${saldoRealNum} no bloco "Situação atual" (e relacione com provisões quando relevante).
+2. Para **Lazer** e **Final de semana**: use a divisão por sextas do mês conforme indicado nas provisões (função getWeekendsInMonth no app — mesma lógica que gerou as referências "por sexta" acima).
+3. **Receitas**: se houver receita relevante no mês e metas com gap (falta até o objetivo), sugira primeiro **aporte em metas** antes de ampliar gastos discricionários.
+4. Prioridades de pagamento com dinheiro em carteira: use o total em carteiras, o saldo real disponível e a lista de contas pendentes/vencidas; não recomende gastos acima do caixa disponível após reservas.
+
 Sua missão: Analise os lançamentos para identificar onde o usuário está gastando mais, alerte com urgência sobre contas vencidas, sugira cortes se o saldo estiver negativo e ajude a estruturar um planejamento para o mês subsequente.
-Quando o usuário perguntar sobre prioridades de pagamento com dinheiro em carteira, use obrigatoriamente o total disponível em carteiras e a lista de carteiras acima para recomendar uma ordem prática, priorizando contas vencidas e próximas do vencimento sem ultrapassar o saldo disponível.
 Responda em português usando Markdown limpo e legível. Regras obrigatórias de formatação:
 - Use títulos com "##".
 - Use listas numeradas quando recomendar sequência de ações.

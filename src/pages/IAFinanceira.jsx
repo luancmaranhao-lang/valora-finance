@@ -1,10 +1,18 @@
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import EmptyState from "../components/EmptyState"
 import FinanceMentorChat from "../components/FinanceMentorChat"
 import PageHeader from "../components/PageHeader"
+import { listarGastosEsporadicosPorCompetencia } from "../services/gastosEsporadicosService"
 import { listarLancamentos } from "../services/lancamentosService"
+import { metasService } from "../services/metasService"
 import { supabase } from "../services/supabaseClient"
 import { getWalletsSummary, WALLETS_UPDATED_EVENT } from "../services/walletsService"
+import {
+  mergeGastosEsporadicosToPlanningItems,
+  sumPendingProvision,
+  VARIABLE_PLANNING_UPDATED_EVENT,
+} from "../utils/variablePlanningStore"
+import { getWeekendsInMonth, valorPorSexta } from "../utils/weekendMonthUtils"
 
 function formatCurrency(value) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value)
@@ -21,6 +29,12 @@ function parseDateOnly(value) {
   return Number.isNaN(local.getTime()) ? null : local
 }
 
+function roundMoney2(n) {
+  const x = Number(n)
+  if (!Number.isFinite(x)) return 0
+  return Math.round(x * 100) / 100
+}
+
 function IAFinanceira() {
   const [transactions, setTransactions] = useState([])
   const [walletSummary, setWalletSummary] = useState(() => getWalletsSummary())
@@ -28,6 +42,7 @@ function IAFinanceira() {
   const [authReady, setAuthReady] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState("")
+  const [mentorExtras, setMentorExtras] = useState({ gastos: [], metas: [] })
 
   const chatPeriod = useMemo(() => {
     const d = new Date()
@@ -90,6 +105,36 @@ function IAFinanceira() {
       window.removeEventListener("storage", syncWallets)
     }
   }, [])
+
+  const loadMentorExtras = useCallback(async () => {
+    const now = new Date()
+    const y = now.getFullYear()
+    const m = now.getMonth()
+    const competencia = `${y}-${String(m + 1).padStart(2, "0")}`
+    try {
+      const [gastos, metas] = await Promise.all([
+        listarGastosEsporadicosPorCompetencia(competencia).catch(() => []),
+        metasService.listarMetas().catch(() => []),
+      ])
+      setMentorExtras({ gastos: gastos ?? [], metas: metas ?? [] })
+    } catch {
+      setMentorExtras({ gastos: [], metas: [] })
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!authReady) return
+    void loadMentorExtras()
+    function refresh() {
+      void loadMentorExtras()
+    }
+    window.addEventListener("lancamentos:updated", refresh)
+    window.addEventListener(VARIABLE_PLANNING_UPDATED_EVENT, refresh)
+    return () => {
+      window.removeEventListener("lancamentos:updated", refresh)
+      window.removeEventListener(VARIABLE_PLANNING_UPDATED_EVENT, refresh)
+    }
+  }, [authReady, loadMentorExtras])
 
   const summary = useMemo(() => {
     const now = new Date()
@@ -218,6 +263,38 @@ function IAFinanceira() {
       return due < today
     })
 
+    const { fridays, saturdays, weekendLabelCount } = getWeekendsInMonth(y, m)
+    const planningItems = mergeGastosEsporadicosToPlanningItems(mentorExtras.gastos, y, m)
+    const totalVariaveisPendentes = roundMoney2(sumPendingProvision(planningItems))
+    const totalWalletBalance = roundMoney2(Number(walletSummary.totalSaldo ?? 0))
+    const despesasPendentesMes = roundMoney2(summary.despesasPend)
+    const saldoRealDisponivel = roundMoney2(totalWalletBalance - despesasPendentesMes - totalVariaveisPendentes)
+
+    const provisoesLinhas = []
+    for (const item of planningItems) {
+      if (item.status !== "pendente" || item.contabilizaNoTotal === false) continue
+      const v = Number(item.plannedValue ?? 0)
+      if (!Number.isFinite(v) || v <= 0) continue
+      let extra = ""
+      if (item.codigo === "final_de_semana" && weekendLabelCount > 0) {
+        const ps = valorPorSexta(v, weekendLabelCount)
+        if (ps != null) extra = ` · referência por sexta ≈ R$ ${ps.toFixed(2)} (${weekendLabelCount} sextas no mês)`
+      } else if (item.codigo === "lazer" && weekendLabelCount > 0) {
+        const ps = valorPorSexta(v, weekendLabelCount)
+        if (ps != null) extra = ` · divisão orientadora (Lazer ÷ sextas) ≈ R$ ${ps.toFixed(2)} em ${weekendLabelCount} sextas`
+      }
+      provisoesLinhas.push(`${item.displayLabel}: R$ ${v.toFixed(2)}${extra}`)
+    }
+
+    const metasLinhas = (mentorExtras.metas ?? []).map((meta) => {
+      const nome = String(meta.nome ?? meta.name ?? "Meta").trim() || "Meta"
+      const alvo = roundMoney2(Number(meta.valor_alvo ?? meta.target ?? 0))
+      const atual = roundMoney2(Number(meta.valor_atual ?? meta.current ?? 0))
+      const falta = roundMoney2(Math.max(0, alvo - atual))
+      const prazo = meta.prazo ?? meta.deadline ?? "—"
+      return `${nome}: guardado R$ ${atual.toFixed(2)} / objetivo R$ ${alvo.toFixed(2)} (faltam R$ ${falta.toFixed(2)}) · prazo ${prazo}`
+    })
+
     return {
       monthName,
       allExpensesMonth,
@@ -226,9 +303,9 @@ function IAFinanceira() {
         nome: wallet.nome,
         saldo: Number(wallet.saldo ?? 0),
       })),
-      totalWalletBalance: Number(walletSummary.totalSaldo ?? 0),
+      totalWalletBalance,
       expensesPaidMonth: summary.despesasPagas,
-      expensesPendingMonth: summary.despesasPend,
+      expensesPendingMonth: despesasPendentesMes,
       receitasMes: summary.receitas,
       saldoPrevistoMes: summary.saldoPrevisto,
       allMonthTransactions: monthRows.map((row) => ({
@@ -239,8 +316,15 @@ function IAFinanceira() {
         valor: row.valor,
         data: row.data,
       })),
+      /** Sextas/sábados do mês civil (mesma lógica que Lançamentos / getWeekendsInMonth). */
+      weekendStats: { fridays, saturdays, weekendLabelCount },
+      totalVariaveisPendentes,
+      saldoRealDisponivel,
+      saldoRealDisponivelFormula: `Carteiras R$ ${totalWalletBalance.toFixed(2)} − despesas pendentes (lançamentos do mês) R$ ${despesasPendentesMes.toFixed(2)} − provisões variáveis pendentes (gastos_esporadicos) R$ ${totalVariaveisPendentes.toFixed(2)} = R$ ${saldoRealDisponivel.toFixed(2)}`,
+      provisoesResumo: provisoesLinhas.join(" | ") || "Nenhuma provisão pendente com valor > 0.",
+      metasResumo: metasLinhas.join(" | ") || "Nenhuma meta cadastrada.",
     }
-  }, [transactions, summary, walletSummary])
+  }, [transactions, summary, walletSummary, mentorExtras])
 
   return (
     <div className="space-y-6">
